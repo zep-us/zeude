@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    container_name: otel-collector-test
+    ports:
+      - "4317:4317"   # gRPC
+      - "4318:4318"   # HTTP
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel/config.yaml
+      - ./output:/output
+    command: ["--config=/etc/otel/config.yaml"]

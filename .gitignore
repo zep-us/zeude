@@ -1,0 +1,153 @@
+# ===========================================
+# Zeude - Git Ignore Configuration
+# ===========================================
+
+# -------------------------------------------
+# Environment & Secrets (CRITICAL - Never commit!)
+# -------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+*.pem
+*.key
+credentials*
+secrets*
+
+# -------------------------------------------
+# Binary Executables
+# -------------------------------------------
+zeude/claude
+zeude/doctor
+zeude/zeude-cli
+
+# Release binaries (use GitHub releases instead)
+zeude/releases/claude-*
+zeude/releases/zeude-*
+zeude/releases/*-darwin-*
+zeude/releases/*-linux-*
+zeude/releases/*-windows-*
+
+# Go binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# -------------------------------------------
+# Build Artifacts
+# -------------------------------------------
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Go
+vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+.venv/
+venv/
+ENV/
+
+# -------------------------------------------
+# Dependencies
+# -------------------------------------------
+node_modules/
+.pnpm-store/
+
+# -------------------------------------------
+# IDE & Editor
+# -------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+.project
+.classpath
+.settings/
+
+# -------------------------------------------
+# OS Files
+# -------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# -------------------------------------------
+# Logs & Debug
+# -------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# -------------------------------------------
+# Test & Coverage
+# -------------------------------------------
+coverage/
+.coverage
+htmlcov/
+.nyc_output/
+*.cover
+
+# -------------------------------------------
+# Claude Code Personal Config (DO NOT COMMIT)
+# -------------------------------------------
+.claude/
+.mcp.json
+.agentvibes/
+
+# BMAD Framework (install separately)
+_bmad/
+_bmad-output/
+
+# -------------------------------------------
+# Temporary Files
+# -------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+
+# -------------------------------------------
+# Documentation Build
+# -------------------------------------------
+_site/
+.docusaurus/
+.cache-loader/
+
+# -------------------------------------------
+# Large/Binary Files
+# -------------------------------------------
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.pdf
+*.zip
+*.tar.gz
+*.rar
+
+# Exception: Keep specific documentation images if needed
+!docs/images/*.png
+!docs/images/*.jpg

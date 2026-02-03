@@ -1,0 +1,26 @@
+# Node
+**/node_modules
+**/.next
+**/out
+**/build
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Releases (built during docker build)
+releases/
+dashboard/public/releases/
+
+# Dev files
+*.md
+!dashboard/README.md

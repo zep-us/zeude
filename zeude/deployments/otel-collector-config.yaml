@@ -1,0 +1,50 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1000
+
+exporters:
+  clickhouse:
+    endpoint: ${CLICKHOUSE_ENDPOINT:-https://localhost:8443}
+    database: ${CLICKHOUSE_DATABASE:-zeude}
+    username: ${CLICKHOUSE_USERNAME:-default}
+    password: ${CLICKHOUSE_PASSWORD:-}
+    logs_table_name: claude_code_logs
+    traces_table_name: claude_code_traces
+    metrics_table_name: claude_code_metrics
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    ttl: 2160h
+
+  debug:
+    verbosity: detailed
+
+service:
+  telemetry:
+    logs:
+      level: debug
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]

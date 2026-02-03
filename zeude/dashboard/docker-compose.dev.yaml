@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # Local ClickHouse for development
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./init-clickhouse.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # OTel Collector (receives telemetry from Claude Code)
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.0
+    ports:
+      - "4317:4317"   # gRPC
+      - "4318:4318"   # HTTP
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+
+volumes:
+  clickhouse_data:
