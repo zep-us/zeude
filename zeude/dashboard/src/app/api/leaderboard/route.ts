@@ -87,13 +87,13 @@ export async function GET(req: Request) {
               sum(output_tokens) as output_tokens,
               sum(cost_usd) as cost_usd,
               sum(cache_read_tokens) as cache_read_tokens,
-              sum(request_count) as request_count,
+              sum(request_count) as total_requests,
               0.10 as retry_density,
               2.0 as growth_rate
             FROM token_usage_hourly
             WHERE hour >= now() - INTERVAL ${days} DAY AND user_id != ''
             GROUP BY user_id
-            HAVING sum(request_count) >= 10
+            HAVING total_requests >= 10
           `,
           format: 'JSONEachRow',
         }),
@@ -104,26 +104,26 @@ export async function GET(req: Request) {
         clickhouse.query({
           query: `
             SELECT
-              user_id,
-              any(user_email) as user_email,
+              d_user_id as user_id,
+              any(d_user_email) as user_email,
               count() as skill_count,
-              topK(1)(invoked_name)[1] as top_skill
+              topK(1)(d_invoked_name)[1] as top_skill
             FROM (
               SELECT
                 prompt_id,
-                argMax(user_id, timestamp) as user_id,
-                argMax(user_email, timestamp) as user_email,
-                argMax(prompt_type, timestamp) as prompt_type,
-                argMax(invoked_name, timestamp) as invoked_name
+                argMax(user_id, timestamp) as d_user_id,
+                argMax(user_email, timestamp) as d_user_email,
+                argMax(prompt_type, timestamp) as d_prompt_type,
+                argMax(invoked_name, timestamp) as d_invoked_name
               FROM ai_prompts
               WHERE timestamp >= now() - INTERVAL ${days} DAY
                 AND user_id != ''
               GROUP BY prompt_id
             )
-            WHERE prompt_type IN ('skill', 'command')
-              AND invoked_name != ''
-              AND invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
-            GROUP BY user_id
+            WHERE d_prompt_type IN ('skill', 'command')
+              AND d_invoked_name != ''
+              AND d_invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
+            GROUP BY d_user_id
             ORDER BY skill_count DESC
             LIMIT 10
           `,
@@ -136,18 +136,18 @@ export async function GET(req: Request) {
         clickhouse.query({
           query: `
             SELECT
-              count(DISTINCT user_id) as total_users,
+              count(DISTINCT d_user_id) as total_users,
               count(DISTINCT CASE
-                WHEN prompt_type IN ('skill', 'command')
-                  AND invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
-                THEN user_id
+                WHEN d_prompt_type IN ('skill', 'command')
+                  AND d_invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
+                THEN d_user_id
               END) as skill_users
             FROM (
               SELECT
                 prompt_id,
-                argMax(user_id, timestamp) as user_id,
-                argMax(prompt_type, timestamp) as prompt_type,
-                argMax(invoked_name, timestamp) as invoked_name
+                argMax(user_id, timestamp) as d_user_id,
+                argMax(prompt_type, timestamp) as d_prompt_type,
+                argMax(invoked_name, timestamp) as d_invoked_name
               FROM ai_prompts
               WHERE timestamp >= now() - INTERVAL ${days} DAY
                 AND user_id != ''
@@ -173,7 +173,7 @@ export async function GET(req: Request) {
       }
 
       const tokenData = tokenDataRaw as { user_id: string; user_email: string; total_tokens: string }[]
-      const efficiencyData = efficiencyDataRaw as { user_id: string; user_email: string; output_tokens: string; cost_usd: string; cache_read_tokens: string; request_count: string; retry_density: number; growth_rate: number }[]
+      const efficiencyData = efficiencyDataRaw as { user_id: string; user_email: string; output_tokens: string; cost_usd: string; cache_read_tokens: string; total_requests: string; retry_density: number; growth_rate: number }[]
       const skillUsersData = skillUsersDataRaw as { user_id: string; user_email: string; skill_count: string; top_skill: string }[]
       const skillAdoptionData = skillAdoptionDataRaw as { total_users: string; skill_users: string }[]
 
@@ -344,7 +344,7 @@ export async function GET(req: Request) {
           outputTokens: parseInt(row.output_tokens) || 0,
           costUsd: parseFloat(row.cost_usd) || 0,
           cacheReadTokens: parseInt(row.cache_read_tokens) || 0,
-          requestCount: parseInt(row.request_count) || 0,
+          requestCount: parseInt(row.total_requests) || 0,
         })
 
         return {
