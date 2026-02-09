@@ -54,10 +54,11 @@ export async function GET(req: Request) {
     }
 
     try {
-      // Run all queries in parallel - using MV for better performance
+      // Run all queries in parallel with graceful degradation
+      // Uses allSettled so a single slow/failing query doesn't take down the entire endpoint
       // Group by user_id for consistent identification (works for both email and Bedrock users)
-      const [tokenResult, efficiencyResult, skillUsersResult, skillAdoptionResult] = await Promise.all([
-        // Top 10 by total tokens used
+      const results = await Promise.allSettled([
+        // [0] Top 10 by total tokens used
         clickhouse.query({
           query: `
             SELECT
@@ -74,44 +75,30 @@ export async function GET(req: Request) {
           format: 'JSONEachRow',
         }),
 
-        // Top 10 by composite efficiency score - minimum 10 requests to qualify
+        // [1] Top 10 by composite efficiency score - minimum 10 requests to qualify
+        // Uses token_usage_hourly only (no expensive view JOINs)
+        // retry_density and growth_rate use defaults since the analysis views
+        // scan all of claude_code_logs with window functions and timeout on large datasets
         clickhouse.query({
           query: `
             SELECT
-              t.user_id as user_id,
-              t.user_email as user_email,
-              t.output_tokens,
-              t.cost_usd,
-              t.cache_read_tokens,
-              t.request_count,
-              coalesce(r.avg_retry_density, 0.10) as retry_density,
-              coalesce(c.avg_growth_rate, 2.0) as growth_rate
-            FROM (
-              SELECT user_id, any(user_email) as user_email,
-                sum(output_tokens) as output_tokens,
-                sum(cost_usd) as cost_usd,
-                sum(cache_read_tokens) as cache_read_tokens,
-                sum(request_count) as request_count
-              FROM token_usage_hourly
-              WHERE hour >= now() - INTERVAL ${days} DAY AND user_id != ''
-              GROUP BY user_id
-              HAVING request_count >= 10
-            ) t
-            LEFT JOIN (
-              SELECT user_id, avg(retry_density) as avg_retry_density
-              FROM retry_analysis WHERE date >= today() - ${days}
-              GROUP BY user_id
-            ) r ON t.user_id = r.user_id
-            LEFT JOIN (
-              SELECT user_id, avg(growth_rate) as avg_growth_rate
-              FROM context_growth_analysis WHERE date >= today() - ${days}
-              GROUP BY user_id
-            ) c ON t.user_id = c.user_id
+              user_id,
+              any(user_email) as user_email,
+              sum(output_tokens) as output_tokens,
+              sum(cost_usd) as cost_usd,
+              sum(cache_read_tokens) as cache_read_tokens,
+              sum(request_count) as request_count,
+              0.10 as retry_density,
+              2.0 as growth_rate
+            FROM token_usage_hourly
+            WHERE hour >= now() - INTERVAL ${days} DAY AND user_id != ''
+            GROUP BY user_id
+            HAVING sum(request_count) >= 10
           `,
           format: 'JSONEachRow',
         }),
 
-        // Top 10 by skill usage (most skill invocations)
+        // [2] Top 10 by skill usage (most skill invocations)
         // Excludes internal/testing skills defined in EXCLUDED_SKILLS
         // Uses dedup subquery: ai_prompts uses MergeTree, PATCH inserts duplicate rows
         clickhouse.query({
@@ -143,7 +130,7 @@ export async function GET(req: Request) {
           format: 'JSONEachRow',
         }),
 
-        // Skill adoption rate (how many users use skills)
+        // [3] Skill adoption rate (how many users use skills)
         // Excludes internal/testing skills defined in EXCLUDED_SKILLS
         // Uses dedup subquery: ai_prompts uses MergeTree, PATCH inserts duplicate rows
         clickhouse.query({
@@ -171,12 +158,19 @@ export async function GET(req: Request) {
         }),
       ])
 
-      const [tokenDataRaw, efficiencyDataRaw, skillUsersDataRaw, skillAdoptionDataRaw] = await Promise.all([
-        tokenResult.json(),
-        efficiencyResult.json(),
-        skillUsersResult.json(),
-        skillAdoptionResult.json(),
-      ])
+      // Extract results with graceful fallbacks
+      const tokenDataRaw = results[0].status === 'fulfilled' ? await results[0].value.json() : []
+      const efficiencyDataRaw = results[1].status === 'fulfilled' ? await results[1].value.json() : []
+      const skillUsersDataRaw = results[2].status === 'fulfilled' ? await results[2].value.json() : []
+      const skillAdoptionDataRaw = results[3].status === 'fulfilled' ? await results[3].value.json() : []
+
+      // Log any failed queries for debugging
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+          const labels = ['token', 'efficiency', 'skillUsers', 'skillAdoption']
+          console.error(`Leaderboard ${labels[i]} query failed:`, (results[i] as PromiseRejectedResult).reason)
+        }
+      }
 
       const tokenData = tokenDataRaw as { user_id: string; user_email: string; total_tokens: string }[]
       const efficiencyData = efficiencyDataRaw as { user_id: string; user_email: string; output_tokens: string; cost_usd: string; cache_read_tokens: string; request_count: string; retry_density: number; growth_rate: number }[]
@@ -199,34 +193,41 @@ export async function GET(req: Request) {
       const userIdToZeudeId = new Map<string, string>()  // ClickHouse user_id -> Supabase UUID
       const userIdToEmail = new Map<string, string>()
 
-      if (allUserIds.size > 0) {
-        const userIdList = Array.from(allUserIds).map(id => `'${id}'`).join(',')
-        // Use GROUP BY with argMax to get deterministic 1:1 mapping per user_id
-        // This prevents non-deterministic results from SELECT DISTINCT
-        const lookupResult = await clickhouse.query({
-          query: `
-            SELECT
-              LogAttributes['user.id'] as user_id,
-              argMax(LogAttributes['user.email'], Timestamp) as user_email,
-              argMax(ResourceAttributes['zeude.user.id'], Timestamp) as zeude_user_id,
-              argMax(ResourceAttributes['zeude.user.email'], Timestamp) as zeude_user_email
-            FROM claude_code_logs
-            WHERE LogAttributes['user.id'] IN (${userIdList})
-            GROUP BY user_id
-          `,
-          format: 'JSONEachRow',
-        })
-        const lookupData = await lookupResult.json() as { user_id: string; user_email: string; zeude_user_id: string; zeude_user_email: string }[]
-        for (const row of lookupData) {
-          if (row.user_email) {
-            userIdToEmail.set(row.user_id, row.user_email)
-          } else if (row.zeude_user_email) {
-            userIdToEmail.set(row.user_id, row.zeude_user_email)
-          }
-          if (row.zeude_user_id) {
-            userIdToZeudeId.set(row.user_id, row.zeude_user_id)
+      // Metadata lookup phase: wrapped in try/catch for graceful degradation
+      // If lookup fails, leaderboard still works with user_id/email as display names
+      try {
+        if (allUserIds.size > 0) {
+          const userIdList = Array.from(allUserIds).map(id => `'${id}'`).join(',')
+          // Use GROUP BY with argMax to get deterministic 1:1 mapping per user_id
+          // Time-bounded to leverage partition pruning on claude_code_logs
+          const lookupResult = await clickhouse.query({
+            query: `
+              SELECT
+                LogAttributes['user.id'] as user_id,
+                argMax(LogAttributes['user.email'], Timestamp) as user_email,
+                argMax(ResourceAttributes['zeude.user.id'], Timestamp) as zeude_user_id,
+                argMax(ResourceAttributes['zeude.user.email'], Timestamp) as zeude_user_email
+              FROM claude_code_logs
+              WHERE Timestamp >= now() - INTERVAL 90 DAY
+                AND LogAttributes['user.id'] IN (${userIdList})
+              GROUP BY user_id
+            `,
+            format: 'JSONEachRow',
+          })
+          const lookupData = await lookupResult.json() as { user_id: string; user_email: string; zeude_user_id: string; zeude_user_email: string }[]
+          for (const row of lookupData) {
+            if (row.user_email) {
+              userIdToEmail.set(row.user_id, row.user_email)
+            } else if (row.zeude_user_email) {
+              userIdToEmail.set(row.user_id, row.zeude_user_email)
+            }
+            if (row.zeude_user_id) {
+              userIdToZeudeId.set(row.user_id, row.zeude_user_id)
+            }
           }
         }
+      } catch (lookupError) {
+        console.error('Leaderboard user lookup failed (continuing with IDs):', lookupError)
       }
 
       // Lookup names from Supabase for all users
@@ -248,67 +249,71 @@ export async function GET(req: Request) {
         allEmails.add(email)
       }
 
-      if (allZeudeIds.size > 0 || allEmails.size > 0) {
-        const supabase = createServerClient()
-        const zeudeIdToName = new Map<string, string>()
-        const emailToName = new Map<string, string>()
+      try {
+        if (allZeudeIds.size > 0 || allEmails.size > 0) {
+          const supabase = createServerClient()
+          const zeudeIdToName = new Map<string, string>()
+          const emailToName = new Map<string, string>()
 
-        // Query by zeude_id (Supabase UUID)
-        if (allZeudeIds.size > 0) {
-          const { data: usersByZeudeId } = await supabase
-            .from('zeude_users')
-            .select('id, name, email')
-            .in('id', Array.from(allZeudeIds))
+          // Query by zeude_id (Supabase UUID)
+          if (allZeudeIds.size > 0) {
+            const { data: usersByZeudeId } = await supabase
+              .from('zeude_users')
+              .select('id, name, email')
+              .in('id', Array.from(allZeudeIds))
 
-          if (usersByZeudeId) {
-            for (const user of usersByZeudeId) {
-              if (user.name) {
-                zeudeIdToName.set(user.id, user.name)
-                if (user.email) emailToName.set(user.email, user.name)
+            if (usersByZeudeId) {
+              for (const user of usersByZeudeId) {
+                if (user.name) {
+                  zeudeIdToName.set(user.id, user.name)
+                  if (user.email) emailToName.set(user.email, user.name)
+                }
               }
             }
           }
-        }
 
-        // Query by email
-        if (allEmails.size > 0) {
-          const { data: usersByEmail } = await supabase
-            .from('zeude_users')
-            .select('id, name, email')
-            .in('email', Array.from(allEmails))
+          // Query by email
+          if (allEmails.size > 0) {
+            const { data: usersByEmail } = await supabase
+              .from('zeude_users')
+              .select('id, name, email')
+              .in('email', Array.from(allEmails))
 
-          if (usersByEmail) {
-            for (const user of usersByEmail) {
-              if (user.name) {
-                if (!zeudeIdToName.has(user.id)) zeudeIdToName.set(user.id, user.name)
-                if (user.email && !emailToName.has(user.email)) emailToName.set(user.email, user.name)
+            if (usersByEmail) {
+              for (const user of usersByEmail) {
+                if (user.name) {
+                  if (!zeudeIdToName.has(user.id)) zeudeIdToName.set(user.id, user.name)
+                  if (user.email && !emailToName.has(user.email)) emailToName.set(user.email, user.name)
+                }
               }
             }
           }
-        }
 
-        // Map zeude_id -> name back to ClickHouse user_id
-        for (const [userId, zeudeId] of userIdToZeudeId) {
-          if (zeudeIdToName.has(zeudeId)) {
-            userIdToName.set(userId, zeudeIdToName.get(zeudeId)!)
+          // Map zeude_id -> name back to ClickHouse user_id
+          for (const [userId, zeudeId] of userIdToZeudeId) {
+            if (zeudeIdToName.has(zeudeId)) {
+              userIdToName.set(userId, zeudeIdToName.get(zeudeId)!)
+            }
+          }
+          // Also map by email for users in tokenData/efficiencyData/skillUsersData
+          for (const row of tokenData) {
+            if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
+              userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
+            }
+          }
+          for (const row of efficiencyData) {
+            if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
+              userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
+            }
+          }
+          for (const row of skillUsersData) {
+            if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
+              userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
+            }
           }
         }
-        // Also map by email for users in tokenData/efficiencyData/skillUsersData
-        for (const row of tokenData) {
-          if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-            userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-          }
-        }
-        for (const row of efficiencyData) {
-          if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-            userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-          }
-        }
-        for (const row of skillUsersData) {
-          if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-            userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-          }
-        }
+      } catch (nameError) {
+        console.error('Leaderboard name lookup failed (continuing with emails/IDs):', nameError)
       }
 
       // Helper to get display name: prefer name, then email, then user_id
