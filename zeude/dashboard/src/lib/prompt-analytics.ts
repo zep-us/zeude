@@ -129,9 +129,16 @@ async function _getUserPromptStats(
         count() as total_prompts,
         avg(prompt_length) as avg_length,
         count(DISTINCT session_id) as unique_sessions
-      FROM ai_prompts
-      WHERE ${clause}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(session_id, timestamp) as session_id,
+          argMax(prompt_length, timestamp) as prompt_length
+        FROM ai_prompts
+        WHERE ${clause}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
     `,
     query_params: { ...params, days },
     format: 'JSONEachRow',
@@ -147,10 +154,16 @@ async function _getUserPromptStats(
       SELECT
         project_path as project,
         count() as count
-      FROM ai_prompts
-      WHERE ${clause}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
-        AND project_path != ''
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(project_path, timestamp) as project_path
+        FROM ai_prompts
+        WHERE ${clause}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
+      WHERE project_path != ''
       GROUP BY project_path
       ORDER BY count DESC
       LIMIT 5
@@ -332,9 +345,15 @@ async function _getUserPromptTypeStats(
       SELECT
         prompt_type,
         count() as count
-      FROM ai_prompts
-      WHERE ${clause}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(prompt_type, timestamp) as prompt_type
+        FROM ai_prompts
+        WHERE ${clause}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
       GROUP BY prompt_type
       ORDER BY count DESC
     `,
@@ -374,11 +393,19 @@ async function _getUserTopSkills(
       SELECT
         invoked_name,
         count() as count,
-        max(timestamp) as last_used
-      FROM ai_prompts
-      WHERE ${clause}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
-        AND prompt_type IN ('skill', 'command', 'agent', 'mcp_tool')
+        max(last_used) as last_used
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(prompt_type, timestamp) as prompt_type,
+          argMax(invoked_name, timestamp) as invoked_name,
+          max(timestamp) as last_used
+        FROM ai_prompts
+        WHERE ${clause}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
+      WHERE prompt_type IN ('skill', 'command', 'agent', 'mcp_tool')
         AND invoked_name != ''
       GROUP BY invoked_name
       ORDER BY count DESC
@@ -416,9 +443,15 @@ async function _getTeamPromptTypeStats(
       SELECT
         prompt_type,
         count() as count
-      FROM ai_prompts
-      WHERE ${teamFilter}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(prompt_type, timestamp) as prompt_type
+        FROM ai_prompts
+        WHERE ${teamFilter}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
       GROUP BY prompt_type
       ORDER BY count DESC
     `,
@@ -457,11 +490,19 @@ async function _getTeamTopSkills(
       SELECT
         invoked_name,
         count() as count,
-        max(timestamp) as last_used
-      FROM ai_prompts
-      WHERE ${teamFilter}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
-        AND prompt_type IN ('skill', 'command', 'agent', 'mcp_tool')
+        max(last_used) as last_used
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(prompt_type, timestamp) as prompt_type,
+          argMax(invoked_name, timestamp) as invoked_name,
+          max(timestamp) as last_used
+        FROM ai_prompts
+        WHERE ${teamFilter}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
+      WHERE prompt_type IN ('skill', 'command', 'agent', 'mcp_tool')
         AND invoked_name != ''
       GROUP BY invoked_name
       ORDER BY count DESC
@@ -497,15 +538,22 @@ async function _getSkillUsageTrend(
   const result = await clickhouse.query({
     query: `
       SELECT
-        toDate(timestamp) as date,
+        date,
         countIf(prompt_type = 'natural' OR prompt_type = '') as natural,
         countIf(prompt_type = 'skill') as skill,
         countIf(prompt_type = 'command') as command,
         countIf(prompt_type = 'agent') as agent,
         countIf(prompt_type = 'mcp_tool') as mcp_tool
-      FROM ai_prompts
-      WHERE ${teamFilter}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(prompt_type, timestamp) as prompt_type,
+          toDate(max(timestamp)) as date
+        FROM ai_prompts
+        WHERE ${teamFilter}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
       GROUP BY date
       ORDER BY date ASC
     `,
@@ -544,9 +592,16 @@ async function _getSkillAdoptionRate(
       SELECT
         count(DISTINCT user_id) as total_users,
         count(DISTINCT CASE WHEN prompt_type IN ('skill', 'command', 'agent', 'mcp_tool') THEN user_id END) as skill_users
-      FROM ai_prompts
-      WHERE ${teamFilter}
-        AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+      FROM (
+        SELECT
+          prompt_id,
+          argMax(user_id, timestamp) as user_id,
+          argMax(prompt_type, timestamp) as prompt_type
+        FROM ai_prompts
+        WHERE ${teamFilter}
+          AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        GROUP BY prompt_id
+      )
     `,
     query_params: { team, days },
     format: 'JSONEachRow',
