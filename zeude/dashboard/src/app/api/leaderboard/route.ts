@@ -113,6 +113,7 @@ export async function GET(req: Request) {
 
         // Top 10 by skill usage (most skill invocations)
         // Excludes internal/testing skills defined in EXCLUDED_SKILLS
+        // Uses dedup subquery: ai_prompts uses MergeTree, PATCH inserts duplicate rows
         clickhouse.query({
           query: `
             SELECT
@@ -120,10 +121,19 @@ export async function GET(req: Request) {
               any(user_email) as user_email,
               count() as skill_count,
               topK(1)(invoked_name)[1] as top_skill
-            FROM ai_prompts
-            WHERE timestamp >= now() - INTERVAL ${days} DAY
-              AND user_id != ''
-              AND prompt_type IN ('skill', 'command')
+            FROM (
+              SELECT
+                prompt_id,
+                argMax(user_id, timestamp) as user_id,
+                argMax(user_email, timestamp) as user_email,
+                argMax(prompt_type, timestamp) as prompt_type,
+                argMax(invoked_name, timestamp) as invoked_name
+              FROM ai_prompts
+              WHERE timestamp >= now() - INTERVAL ${days} DAY
+                AND user_id != ''
+              GROUP BY prompt_id
+            )
+            WHERE prompt_type IN ('skill', 'command')
               AND invoked_name != ''
               AND invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
             GROUP BY user_id
@@ -135,6 +145,7 @@ export async function GET(req: Request) {
 
         // Skill adoption rate (how many users use skills)
         // Excludes internal/testing skills defined in EXCLUDED_SKILLS
+        // Uses dedup subquery: ai_prompts uses MergeTree, PATCH inserts duplicate rows
         clickhouse.query({
           query: `
             SELECT
@@ -144,9 +155,17 @@ export async function GET(req: Request) {
                   AND invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
                 THEN user_id
               END) as skill_users
-            FROM ai_prompts
-            WHERE timestamp >= now() - INTERVAL ${days} DAY
-              AND user_id != ''
+            FROM (
+              SELECT
+                prompt_id,
+                argMax(user_id, timestamp) as user_id,
+                argMax(prompt_type, timestamp) as prompt_type,
+                argMax(invoked_name, timestamp) as invoked_name
+              FROM ai_prompts
+              WHERE timestamp >= now() - INTERVAL ${days} DAY
+                AND user_id != ''
+              GROUP BY prompt_id
+            )
           `,
           format: 'JSONEachRow',
         }),

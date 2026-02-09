@@ -1,6 +1,10 @@
 -- AI Prompts Table
 -- Stores all user prompts from Claude Code for analytics and AI coaching
 -- Data is inserted via the prompt-logger hook on UserPromptSubmit event
+--
+-- NOTE: This table uses MergeTree() (not ReplacingMergeTree).
+-- The PATCH endpoint at /api/prompts/[id] inserts duplicate rows for updates.
+-- All monitoring queries MUST deduplicate by prompt_id using argMax(field, timestamp).
 
 CREATE TABLE IF NOT EXISTS ai_prompts (
     prompt_id UUID DEFAULT generateUUIDv4(),
