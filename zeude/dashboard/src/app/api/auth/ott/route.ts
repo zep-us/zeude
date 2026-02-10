@@ -44,7 +44,7 @@ export async function POST(req: Request) {
       .single()
 
     if (error || !user) {
-      console.error('User lookup failed:', { error, user, agentKey })
+      console.error('User lookup failed:', { error, user, agentKey: '[REDACTED]' })
       return Response.json({ error: 'Invalid agent key', debug: error?.message || 'User not found' }, { status: 401 })
     }
 
