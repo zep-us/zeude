@@ -230,8 +230,8 @@ which claude
 
 ```bash
 cd dashboard
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 ### Build Binaries

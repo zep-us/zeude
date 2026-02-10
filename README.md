@@ -197,7 +197,7 @@ This proves that **"Measurement brings visibility, and sharing drives adoption."
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  claude (shim)  │────▶│  real claude     │────▶│  Claude API     │
-│  ~/.zeude/bin   │     │  /usr/local/bin  │     │                 │
+│  ~/.zeude/bin   │     │  (original path) │     │                 │
 └────────┬────────┘     └──────────────────┘     └─────────────────┘
          │
          │ on startup: sync config, skills, hooks
@@ -220,15 +220,17 @@ When a developer runs `claude`:
 
 ```
 zeude/
-├── cmd/                    # Go CLI source (shim, doctor)
+├── cmd/                    # Go CLI source (zeude, claude shim, doctor)
 ├── dashboard/              # Next.js web dashboard
 │   ├── src/app/api/       # API routes
 │   ├── supabase/          # Database migrations
 │   └── clickhouse/        # Analytics schema
 ├── deployments/           # Docker/K8s configurations
 ├── internal/              # Go internal packages
+│   ├── autoupdate/       # Self-update mechanism
+│   ├── config/           # Endpoint configuration
 │   ├── mcpconfig/        # MCP sync logic
-│   └── autoupdate/       # Self-update mechanism
+│   └── resolver/         # Binary path resolution
 └── scripts/              # Build and deployment
 ```
 
@@ -278,7 +280,7 @@ For organizations requiring enterprise-grade support, custom features, or profes
 Apache License 2.0 - see [LICENSE](LICENSE) for details.
 
 ```
-Copyright 2024-2025 ZEP Co., Ltd.
+Copyright 2024-2026 ZEP Co., Ltd.
 ```
 
 ---

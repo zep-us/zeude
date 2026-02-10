@@ -64,8 +64,8 @@ cd zeude/dashboard
 # Install dependencies
 pnpm install
 
-# Copy environment variables
-cp .env.example .env.local
+# Copy environment variables (from repo root)
+cp ../../.env.example .env.local
 
 # Edit .env.local with your credentials
 # You'll need Supabase and ClickHouse credentials
@@ -79,10 +79,10 @@ The dashboard will be available at `http://localhost:3000`.
 ### CLI (Go)
 
 ```bash
-cd zeude/cmd
+cd zeude
 
 # Build the CLI
-go build -o zeude-cli ./...
+go build -o zeude-cli ./cmd/zeude/
 
 # Run tests
 go test ./...
@@ -94,7 +94,7 @@ For local development with Supabase and ClickHouse:
 
 ```bash
 # Using Docker Compose (if available)
-docker compose -f zeude/deployments/docker-compose.dev.yml up -d
+docker compose -f zeude/dashboard/docker-compose.dev.yaml up -d
 ```
 
 ## How to Contribute
