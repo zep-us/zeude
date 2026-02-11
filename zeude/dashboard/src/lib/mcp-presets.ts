@@ -131,10 +131,18 @@ export interface ClaudeJsonMCPServer {
   command: string
   args?: string[]
   env?: Record<string, string>
+  type?: string
+  url?: string
 }
 
 export interface ClaudeJsonConfig {
   mcpServers?: Record<string, ClaudeJsonMCPServer>
+}
+
+function isServerConfig(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const obj = value as Record<string, unknown>
+  return 'command' in obj || (obj.type === 'http' && 'url' in obj)
 }
 
 export function parseClaudeJson(jsonStr: string): { servers: { name: string; config: ClaudeJsonMCPServer }[]; error?: string } {
@@ -152,9 +160,8 @@ export function parseClaudeJson(jsonStr: string): { servers: { name: string; con
 
     // Handle just the mcpServers object directly
     if (typeof parsed === 'object' && !Array.isArray(parsed)) {
-      // Check if it looks like an MCP server config (has command property)
-      const firstValue = Object.values(parsed)[0] as Record<string, unknown> | undefined
-      if (firstValue && typeof firstValue === 'object' && 'command' in firstValue) {
+      const firstValue = Object.values(parsed)[0]
+      if (isServerConfig(firstValue)) {
         const servers = Object.entries(parsed).map(([name, config]) => ({
           name,
           config: config as ClaudeJsonMCPServer,

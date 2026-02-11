@@ -85,7 +85,7 @@ export async function GET(
     const [serversResult, skillsResult, hooksResult] = await Promise.all([
       supabase
         .from('zeude_mcp_servers')
-        .select('id, name, command, args, env, is_global, teams')
+        .select('id, name, type, command, args, env, url, is_global, teams')
         .eq('status', 'active'),
       supabase
         .from('zeude_skills')
@@ -130,7 +130,7 @@ export async function GET(
     })
 
     // Format as claude.json mcpServers format
-    const mcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {}
+    const mcpServers: Record<string, Record<string, unknown>> = {}
     const usedKeys = new Set<string>()
 
     for (const server of applicableServers) {
@@ -146,9 +146,20 @@ export async function GET(
       }
       usedKeys.add(serverKey)
 
-      mcpServers[serverKey] = {
-        command: server.command,
-        args: server.args || [],
+      const serverType = server.type || 'subprocess'
+
+      if (serverType === 'http') {
+        // HTTP type: { type: "http", url: "https://..." }
+        mcpServers[serverKey] = {
+          type: 'http',
+          url: server.url,
+        }
+      } else {
+        // Subprocess type: { command: "npx", args: [...] }
+        mcpServers[serverKey] = {
+          command: server.command,
+          args: server.args || [],
+        }
       }
 
       // Only include env if it has values

@@ -21,7 +21,7 @@ export async function PATCH(
     const body = await req.json()
 
     // Only allow updating specific fields
-    const allowedFields = ['name', 'command', 'args', 'env', 'teams', 'is_global', 'status']
+    const allowedFields = ['name', 'type', 'command', 'args', 'env', 'url', 'teams', 'is_global', 'status']
     const updates: Record<string, unknown> = {}
 
     for (const field of allowedFields) {

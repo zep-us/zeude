@@ -100,14 +100,20 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json()
-    const { name, command, args = [], env = {}, teams = [], isGlobal = false } = body
+    const { name, type = 'subprocess', command, args = [], env = {}, url, teams = [], isGlobal = false } = body
 
     if (!name || typeof name !== 'string') {
       return Response.json({ error: 'Name is required' }, { status: 400 })
     }
 
-    if (!command || typeof command !== 'string') {
-      return Response.json({ error: 'Command is required' }, { status: 400 })
+    if (type === 'http') {
+      if (!url || typeof url !== 'string') {
+        return Response.json({ error: 'URL is required for HTTP type' }, { status: 400 })
+      }
+    } else {
+      if (!command || typeof command !== 'string') {
+        return Response.json({ error: 'Command is required for subprocess type' }, { status: 400 })
+      }
     }
 
     const supabase = createServerClient()
@@ -116,9 +122,11 @@ export async function POST(req: Request) {
       .from('zeude_mcp_servers')
       .insert({
         name,
-        command,
-        args,
+        type,
+        command: type === 'http' ? '' : command,
+        args: type === 'http' ? [] : args,
         env,
+        url: type === 'http' ? url : null,
         teams: isGlobal ? [] : teams,
         is_global: isGlobal,
         status: 'active',

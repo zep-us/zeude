@@ -27,6 +27,10 @@ interface MCPTableProps {
 }
 
 export function getInstallCommand(server: MCPServer): string {
+  if (server.type === 'http') {
+    return server.url || '# HTTP MCP server'
+  }
+
   const preset = MCP_PRESETS.find(p =>
     p.command === server.command &&
     server.args.some(arg => p.args.includes(arg))
@@ -89,8 +93,15 @@ export function MCPTable({
           const status = installStatus[server.id]
           return (
             <TableRow key={server.id}>
-              <TableCell className="font-medium">{server.name}</TableCell>
-              <TableCell className="font-mono text-sm">{server.command}</TableCell>
+              <TableCell className="font-medium">
+                <div className="flex items-center gap-1.5">
+                  {server.name}
+                  {server.type === 'http' && <Badge variant="outline" className="text-xs">HTTP</Badge>}
+                </div>
+              </TableCell>
+              <TableCell className="font-mono text-sm max-w-[200px] truncate" title={server.type === 'http' ? (server.url || '') : server.command}>
+                {server.type === 'http' ? (server.url || '-') : server.command}
+              </TableCell>
               <TableCell>
                 {server.is_global ? (
                   <Badge>All Teams</Badge>

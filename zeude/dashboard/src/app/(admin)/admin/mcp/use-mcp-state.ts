@@ -90,9 +90,11 @@ export function useMCPState() {
     setEditingId(server.id)
     setFormData({
       name: server.name,
+      type: server.type || 'subprocess',
       command: server.command,
       args: server.args,
       env: server.env,
+      url: server.url || '',
       teams: server.teams,
       isGlobal: server.is_global,
     })
@@ -104,21 +106,25 @@ export function useMCPState() {
   }, [])
 
   const handleSave = useCallback(async () => {
-    if (!formData.name || !formData.command) return
+    if (!formData.name) return
+    if (formData.type === 'subprocess' && !formData.command) return
+    if (formData.type === 'http' && !formData.url) return
 
     setSaving(true)
     try {
-      const url = dialogMode === 'create' ? '/api/admin/mcp' : `/api/admin/mcp/${editingId}`
+      const apiUrl = dialogMode === 'create' ? '/api/admin/mcp' : `/api/admin/mcp/${editingId}`
       const method = dialogMode === 'create' ? 'POST' : 'PATCH'
 
-      const res = await fetch(url, {
+      const res = await fetch(apiUrl, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: formData.name,
-          command: formData.command,
-          args: formData.args,
+          type: formData.type,
+          command: formData.type === 'subprocess' ? formData.command : '',
+          args: formData.type === 'subprocess' ? formData.args : [],
           env: formData.env,
+          url: formData.type === 'http' ? formData.url : null,
           teams: formData.teams,
           is_global: formData.isGlobal,
         }),
@@ -164,9 +170,11 @@ export function useMCPState() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          type: formData.type,
           command: formData.command,
           args: formData.args,
           env: formData.env,
+          url: formData.url,
         }),
       })
 

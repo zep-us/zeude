@@ -28,8 +28,18 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json()
-    const { command, args = [], env = {} } = body
+    const { type = 'subprocess', command, args = [], env = {}, url } = body
 
+    // HTTP type: test URL reachability
+    if (type === 'http') {
+      if (!url || typeof url !== 'string') {
+        return Response.json({ error: 'URL is required for HTTP type' }, { status: 400 })
+      }
+      const result = await testHTTPMCPServer(url)
+      return Response.json(result)
+    }
+
+    // Subprocess type: existing logic
     if (!command || typeof command !== 'string') {
       return Response.json({ error: 'Command is required' }, { status: 400 })
     }
@@ -199,4 +209,48 @@ async function testMCPServer(
       child.stdin?.end()
     }, 100)
   })
+}
+
+async function testHTTPMCPServer(url: string): Promise<TestResult> {
+  try {
+    // Validate URL format
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { success: false, message: 'Only HTTP/HTTPS URLs are allowed' }
+    }
+
+    // Send a POST request to test MCP endpoint reachability
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'zeude-test', version: '1.0.0' } } }),
+      signal: controller.signal,
+    })
+
+    clearTimeout(timeout)
+
+    if (res.ok || res.status === 405 || res.status === 400) {
+      // 200 = MCP responded, 405/400 = server exists but may need different method
+      return {
+        success: true,
+        message: `Server reachable (HTTP ${res.status})`,
+        details: `URL: ${url}`,
+      }
+    }
+
+    return {
+      success: false,
+      message: `Server returned HTTP ${res.status}`,
+      details: sanitizeOutput(await res.text().catch(() => 'No response body')),
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    if (message.includes('abort')) {
+      return { success: false, message: 'Connection timed out (10s)', details: `URL: ${url}` }
+    }
+    return { success: false, message: `Connection failed: ${message}`, details: `URL: ${url}` }
+  }
 }

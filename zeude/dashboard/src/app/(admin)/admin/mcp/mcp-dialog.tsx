@@ -12,9 +12,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Check, Loader2, AlertCircle, FileJson, Grid3X3, PenLine, Zap } from 'lucide-react'
+import { Check, Loader2, AlertCircle, FileJson, Grid3X3, PenLine, Zap, Globe } from 'lucide-react'
 import { MCP_PRESETS, parseClaudeJson, type MCPPreset } from '@/lib/mcp-presets'
-import type { MCPFormData, RegistrationMode, TestResult } from './types'
+import type { MCPFormData, MCPServerTypeOption, RegistrationMode, TestResult } from './types'
 
 interface MCPDialogProps {
   open: boolean
@@ -75,9 +75,11 @@ export function MCPDialog({
     setSelectedPreset(preset)
     setFormData({
       name: preset.name,
+      type: 'subprocess',
       command: preset.command,
       args: [...preset.args],
       env: { ...preset.env },
+      url: '',
       teams: [],
       isGlobal: false,
     })
@@ -102,11 +104,14 @@ export function MCPDialog({
 
     if (result.servers.length === 1) {
       const server = result.servers[0]
+      const isHttp = server.config.type === 'http'
       setFormData({
         name: server.name,
-        command: server.config.command,
+        type: isHttp ? 'http' : 'subprocess',
+        command: server.config.command || '',
         args: server.config.args || [],
         env: server.config.env || {},
+        url: server.config.url || '',
         teams: [],
         isGlobal: false,
       })
@@ -115,11 +120,15 @@ export function MCPDialog({
   }
 
   function selectParsedServer(server: { name: string; config: { command: string; args?: string[]; env?: Record<string, string> } }) {
+    const cfg = server.config as import('@/lib/mcp-presets').ClaudeJsonMCPServer
+    const isHttp = cfg.type === 'http'
     setFormData({
       name: server.name,
-      command: server.config.command,
-      args: server.config.args || [],
-      env: server.config.env || {},
+      type: isHttp ? 'http' : 'subprocess',
+      command: cfg.command || '',
+      args: cfg.args || [],
+      env: cfg.env || {},
+      url: cfg.url || '',
       teams: [],
       isGlobal: false,
     })
@@ -269,38 +278,74 @@ export function MCPDialog({
         </div>
 
         <div>
-          <label className="text-sm font-medium">Command</label>
-          <Input
-            value={formData.command}
-            onChange={(e) => setFormData({ ...formData, command: e.target.value })}
-            placeholder="e.g., npx"
-            className="font-mono"
-          />
+          <label className="text-sm font-medium">Type</label>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            <button
+              onClick={() => setFormData({ ...formData, type: 'subprocess' })}
+              className={`p-2 rounded-lg border-2 text-left text-sm transition-colors ${formData.type === 'subprocess' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}
+            >
+              <PenLine className="h-4 w-4 mb-1" />
+              <div className="font-medium">Subprocess</div>
+              <div className="text-xs text-muted-foreground">npx, uvx command</div>
+            </button>
+            <button
+              onClick={() => setFormData({ ...formData, type: 'http' })}
+              className={`p-2 rounded-lg border-2 text-left text-sm transition-colors ${formData.type === 'http' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}
+            >
+              <Globe className="h-4 w-4 mb-1" />
+              <div className="font-medium">HTTP</div>
+              <div className="text-xs text-muted-foreground">Remote URL endpoint</div>
+            </button>
+          </div>
         </div>
 
-        <div>
-          <label className="text-sm font-medium">Arguments</label>
-          <div className="flex gap-2 mb-2">
+        {formData.type === 'http' ? (
+          <div>
+            <label className="text-sm font-medium">URL</label>
             <Input
-              value={newArg}
-              onChange={(e) => setNewArg(e.target.value)}
-              placeholder="Add argument..."
+              value={formData.url}
+              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+              placeholder="e.g., https://mcp.zep.works/posthog/mcp"
               className="font-mono"
-              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addArg())}
             />
-            <Button type="button" variant="outline" onClick={addArg}>Add</Button>
           </div>
-          {formData.args.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {formData.args.map((arg, i) => (
-                <Badge key={i} variant="secondary" className="font-mono">
-                  {arg}
-                  <button onClick={() => removeArg(i)} className="ml-1 hover:text-destructive">x</button>
-                </Badge>
-              ))}
+        ) : (
+          <>
+            <div>
+              <label className="text-sm font-medium">Command</label>
+              <Input
+                value={formData.command}
+                onChange={(e) => setFormData({ ...formData, command: e.target.value })}
+                placeholder="e.g., npx"
+                className="font-mono"
+              />
             </div>
-          )}
-        </div>
+
+            <div>
+              <label className="text-sm font-medium">Arguments</label>
+              <div className="flex gap-2 mb-2">
+                <Input
+                  value={newArg}
+                  onChange={(e) => setNewArg(e.target.value)}
+                  placeholder="Add argument..."
+                  className="font-mono"
+                  onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addArg())}
+                />
+                <Button type="button" variant="outline" onClick={addArg}>Add</Button>
+              </div>
+              {formData.args.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {formData.args.map((arg, i) => (
+                    <Badge key={i} variant="secondary" className="font-mono">
+                      {arg}
+                      <button onClick={() => removeArg(i)} className="ml-1 hover:text-destructive">x</button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         <div>
           <label className="text-sm font-medium">Environment Variables</label>
@@ -380,7 +425,7 @@ export function MCPDialog({
               variant="outline"
               size="sm"
               onClick={onTest}
-              disabled={testing || !formData.command}
+              disabled={testing || (formData.type === 'subprocess' ? !formData.command : !formData.url)}
             >
               {testing ? (
                 <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Testing...</>
@@ -463,12 +508,12 @@ export function MCPDialog({
           {mode === 'create' && step < 3 ? (
             <Button
               onClick={() => setStep(step + 1)}
-              disabled={step === 2 && (!formData.name || !formData.command)}
+              disabled={step === 2 && (!formData.name || (formData.type === 'subprocess' ? !formData.command : !formData.url))}
             >
               Next
             </Button>
           ) : (
-            <Button onClick={onSave} disabled={!formData.name || !formData.command || saving}>
+            <Button onClick={onSave} disabled={!formData.name || (formData.type === 'subprocess' ? !formData.command : !formData.url) || saving}>
               {saving ? 'Saving...' : 'Save'}
             </Button>
           )}

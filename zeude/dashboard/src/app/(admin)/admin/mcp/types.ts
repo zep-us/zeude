@@ -16,21 +16,26 @@ export interface InstallStatusSummary {
 }
 
 export type RegistrationMode = 'preset' | 'json' | 'manual'
+export type MCPServerTypeOption = 'subprocess' | 'http'
 
 export interface MCPFormData {
   name: string
+  type: MCPServerTypeOption
   command: string
   args: string[]
   env: Record<string, string>
+  url: string
   teams: string[]
   isGlobal: boolean
 }
 
 export const defaultFormData: MCPFormData = {
   name: '',
+  type: 'subprocess',
   command: '',
   args: [],
   env: {},
+  url: '',
   teams: [],
   isGlobal: false,
 }

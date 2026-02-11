@@ -12,6 +12,7 @@ export type Json =
 export type UserRole = 'admin' | 'member'
 export type UserStatus = 'active' | 'inactive'
 export type MCPServerStatus = 'active' | 'inactive'
+export type MCPServerType = 'subprocess' | 'http'
 
 export interface Database {
   public: {
@@ -139,9 +140,11 @@ export interface Database {
         Row: {
           id: string
           name: string
+          type: MCPServerType
           command: string
           args: string[]
           env: Record<string, string>
+          url: string | null
           teams: string[]
           is_global: boolean
           status: MCPServerStatus
@@ -152,9 +155,11 @@ export interface Database {
         Insert: {
           id?: string
           name: string
-          command: string
+          type?: MCPServerType
+          command?: string
           args?: string[]
           env?: Record<string, string>
+          url?: string | null
           teams?: string[]
           is_global?: boolean
           status?: MCPServerStatus
@@ -165,9 +170,11 @@ export interface Database {
         Update: {
           id?: string
           name?: string
+          type?: MCPServerType
           command?: string
           args?: string[]
           env?: Record<string, string>
+          url?: string | null
           teams?: string[]
           is_global?: boolean
           status?: MCPServerStatus
@@ -215,13 +222,6 @@ export interface Skill {
   created_by: string | null
   created_at: string
   updated_at: string
-  // Skill hint fields
-  keywords: string[] // Deprecated: use primary_keywords/secondary_keywords
-  primary_keywords: string[] // High-confidence keywords (trigger alone)
-  secondary_keywords: string[] // Lower-confidence keywords (need 2+ matches)
-  hint: string | null // Guidance for Claude when skill is suggested
-  is_general: boolean // Always show in skill hints
-  is_command: boolean // Exclude from skill-rules if true
 }
 
 export interface NewSkill {
