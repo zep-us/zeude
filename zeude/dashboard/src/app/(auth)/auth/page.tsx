@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 
 export default async function AuthPage({
   searchParams,
@@ -27,6 +28,13 @@ export default async function AuthPage({
         </p>
         <p className="text-sm text-muted-foreground">
           Run <code className="bg-muted px-2 py-1 rounded">/zeude</code> in Claude Code to authenticate.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Looking for the public walkthrough?{' '}
+          <Link href="/demo/landing" className="underline underline-offset-4">
+            Open the demo page
+          </Link>
+          .
         </p>
       </div>
     </div>

@@ -51,7 +51,7 @@ Before you begin, ensure you have the following installed:
    ```
 3. Add the upstream remote:
    ```bash
-   git remote add upstream https://github.com/ZEP-Inc/zeude.git
+   git remote add upstream https://github.com/zep-us/zeude.git
    ```
 
 ## Development Setup

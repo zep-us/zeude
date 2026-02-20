@@ -162,14 +162,14 @@ This proves that **"Measurement brings visibility, and sharing drives adoption."
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/ZEP-Inc/zeude.git
+   git clone https://github.com/zep-us/zeude.git
    cd zeude
    ```
 
 2. **Set up environment variables**
    ```bash
-   cp .env.example .env
-   # Edit .env with your Supabase and ClickHouse credentials
+   cp .env.example zeude/dashboard/.env.local
+   # Edit zeude/dashboard/.env.local with your Supabase and ClickHouse credentials
    ```
 
 3. **Start the dashboard**

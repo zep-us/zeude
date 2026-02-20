@@ -261,5 +261,5 @@ MOCK_EMAIL=your@email.com
 
 ## Support
 
-- Issues: https://github.com/ZEP-Inc/zeude/issues
+- Issues: https://github.com/zep-us/zeude/issues
 - Dashboard: https://your-dashboard-url

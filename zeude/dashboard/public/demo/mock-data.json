@@ -1,0 +1,32 @@
+{
+  "dataset": "synthetic_v1",
+  "generated_at": "2026-02-19T00:00:00Z",
+  "summary": {
+    "sample_users": 148,
+    "prompt_volume_per_day": 12400,
+    "skill_suggestion_ctr_percent": 31.2
+  },
+  "teams": [
+    {
+      "name": "Frontend Guild",
+      "sessions": 512,
+      "suggestion_acceptance_rate": 33
+    },
+    {
+      "name": "Platform Core",
+      "sessions": 438,
+      "suggestion_acceptance_rate": 29
+    },
+    {
+      "name": "Data Infra",
+      "sessions": 391,
+      "suggestion_acceptance_rate": 35
+    },
+    {
+      "name": "Security Ops",
+      "sessions": 264,
+      "suggestion_acceptance_rate": 27
+    }
+  ],
+  "notice": "All values are synthetic for public demonstration."
+}
