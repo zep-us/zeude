@@ -77,11 +77,6 @@ detect_platform() {
     case "$os" in
         darwin) os="darwin" ;;
         linux) os="linux" ;;
-        msys*|mingw*|cygwin*)
-            printf "${YELLOW}Windows detected (Git Bash/MSYS).${NC}\n"
-            printf "Please use the PowerShell installer instead:\n"
-            printf "  ${BLUE}irm \"${DOWNLOAD_BASE}/releases/install.ps1\" | iex${NC}\n"
-            exit 1 ;;
         *) printf "${RED}Unsupported OS: $os${NC}\n"; exit 1 ;;
     esac
 
@@ -96,8 +91,7 @@ detect_platform() {
 
 # 1. Detect platform
 echo -n "Detecting platform... "
-PLATFORM=$(detect_platform) || exit 1
-if [ -z "$PLATFORM" ]; then exit 1; fi
+PLATFORM=$(detect_platform)
 printf "${GREEN}$PLATFORM${NC}\n"
 
 # 2. Find real claude location (excluding our shim)
