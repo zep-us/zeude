@@ -140,7 +140,7 @@ AS SELECT
        ResourceAttributes['zeude.user.id'],
        LogAttributes['user.id']) as user_id,
     multiIf(
-        ServiceName ILIKE 'codex%', 'codex',
+        ServiceName ILIKE '%codex%', 'codex',
         'claude'
     ) as source,
     anyIf(LogAttributes['user.email'], LogAttributes['user.email'] != '') as user_email,
@@ -228,7 +228,7 @@ GROUP BY user_id, source, date;
 -- ================================================
 CREATE VIEW IF NOT EXISTS retry_analysis AS
 SELECT
-    multiIf(ServiceName ILIKE 'codex%', 'codex', 'claude') as source,
+    multiIf(ServiceName ILIKE '%codex%', 'codex', 'claude') as source,
     user_id,
     session_id,
     toDate(timestamp) as date,
@@ -279,7 +279,7 @@ GROUP BY source, user_id, session_id, date;
 -- ================================================
 CREATE VIEW IF NOT EXISTS context_growth_analysis AS
 SELECT
-    multiIf(ServiceName ILIKE 'codex%', 'codex', 'claude') as source,
+    multiIf(ServiceName ILIKE '%codex%', 'codex', 'claude') as source,
     user_id,
     session_id,
     toDate(min(timestamp)) as date,
@@ -344,7 +344,7 @@ AS SELECT
     LogAttributes['project_path'] as project_path,
     LogAttributes['working_directory'] as working_directory
 FROM claude_code_logs
-WHERE ServiceName ILIKE 'codex%'
+WHERE ServiceName ILIKE '%codex%'
   AND LogAttributes['prompt'] != ''
   AND LogAttributes['prompt'] != '[REDACTED]';
 

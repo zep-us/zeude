@@ -1,97 +1,105 @@
 # Zeude
 
-Zeude is an enterprise monitoring and configuration management platform for Claude Code. It provides telemetry collection, prompt analytics, centralized MCP server management, and remote hook deployment.
+**Open-source monitoring and configuration platform for AI coding assistants.**
+
+Zeude gives engineering teams visibility into how Claude Code and OpenAI Codex are used — prompt analytics, cost tracking, skill distribution, and centralized configuration — all from a single self-hosted dashboard.
+
+## Why Zeude?
+
+- **Understand usage** — See who's using what, how much it costs, and which prompts work best
+- **Distribute knowledge** — Push skills, MCP servers, hooks, and agent profiles to your whole team
+- **Support multiple tools** — Monitor both Claude Code and OpenAI Codex from one place
+- **Own your data** — Self-hosted with Supabase + ClickHouse, no data leaves your infrastructure
 
 ## Features
 
-- **OpenTelemetry Integration**: Collect and analyze Claude Code and Codex usage metrics
-- **Prompt Analytics**: Track and analyze all prompts sent to Claude Code
-- **Multi-Agent Support**: Monitor both Claude Code and OpenAI Codex from a single dashboard
-- **Skill Distribution**: Multi-file skill management with folder structure support
-- **Agent Profiles**: Centrally manage Claude Code agent configurations
-- **MCP Server Management**: Centrally manage MCP servers across your team
-- **Remote Hook Deployment**: Deploy Claude Code hooks from the dashboard
-- **Auto-Update**: CLI binary automatically updates when new versions are available
-- **Team Management**: Organize users into teams with cohort-based grouping
+| Feature | Description |
+|---------|-------------|
+| **Prompt Analytics** | Track all prompts with token usage, cost, and model breakdown |
+| **Leaderboard** | Weekly usage rankings with cohort-based grouping |
+| **Skill Management** | Multi-file skills with keyword-based suggestion and per-user preferences |
+| **Agent Profiles** | Centrally manage and distribute agent configurations |
+| **MCP Server Sync** | Push MCP server configs to all team members automatically |
+| **Remote Hooks** | Deploy Claude Code hooks (Bash/Python/Node.js) from the dashboard |
+| **Codex Integration** | Unified telemetry for OpenAI Codex alongside Claude Code |
+| **Auto-Update** | CLI shim self-updates every 24 hours |
+| **Team Management** | Organize users into teams with role-based access |
 
-## Quick Install
+## Architecture
+
+```
+Developer Machine                          Self-Hosted Infrastructure
+┌──────────────────────┐                   ┌────────────────────────────┐
+│                      │                   │                            │
+│  claude/codex (shim) │──── on startup ──▶│  Zeude Dashboard (Next.js) │
+│  ~/.zeude/bin/       │   sync config     │  ├── Supabase (users, config)
+│         │            │                   │  └── ClickHouse (telemetry)│
+│         ▼            │                   │                            │
+│  real claude/codex   │                   │  OTel Collector            │
+│  (original binary)   │──── telemetry ──▶│  (receives spans & logs)   │
+│                      │                   │                            │
+└──────────────────────┘                   └────────────────────────────┘
+```
+
+### How the shim works
+
+When you run `claude` (or `codex`), the Zeude shim:
+
+1. Fetches your team's config from the dashboard API
+2. Syncs MCP servers → `~/.claude.json`
+3. Installs hooks → `~/.claude/hooks/`
+4. Syncs skills → `~/.claude/skills/` (or `~/.codex/skills/`)
+5. Installs agent profiles → `~/.claude/agents/`
+6. Injects OTel telemetry environment variables
+7. `exec`s the real CLI binary (replaces the shim process)
+
+## Quick Start
+
+### 1. Deploy the dashboard
 
 ```bash
-curl -fsSL https://your-dashboard-url/releases/install.sh | ZEUDE_AGENT_KEY=zd_xxx bash
+cd dashboard
+cp .env.example .env.local   # configure Supabase + ClickHouse URLs
+npm install
+npm run dev
 ```
 
-Replace `zd_xxx` with your agent key from the dashboard.
+### 2. Install the CLI shim
 
-## Manual Installation
-
-### Prerequisites
-
-- Claude Code installed (`npm install -g @anthropic-ai/claude-code`)
-- macOS (Intel/Apple Silicon) or Linux (x86_64/arm64)
-
-### Steps
-
-1. **Download the installer**
-   ```bash
-   curl -fsSL https://your-dashboard-url/releases/install.sh -o install.sh
-   chmod +x install.sh
-   ```
-
-2. **Run with your agent key**
-   ```bash
-   ZEUDE_AGENT_KEY=zd_your_key ./install.sh
-   ```
-
-3. **Restart your shell**
-   ```bash
-   source ~/.zshrc  # or ~/.bashrc
-   ```
-
-4. **Verify installation**
-   ```bash
-   zeude doctor
-   ```
-
-## How It Works
-
-### Architecture
-
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  claude (shim)  │────▶│  real claude     │────▶│  Claude API     │
-│  ~/.zeude/bin   │     │  /usr/local/bin  │     │                 │
-└────────┬────────┘     └──────────────────┘     └─────────────────┘
-         │
-         │ on startup
-         ▼
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Sync Config    │────▶│  Zeude Dashboard │────▶│  Supabase       │
-│  MCP + Hooks    │     │  Dashboard        │     │  ClickHouse     │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
+```bash
+curl -fsSL https://YOUR_DASHBOARD_URL/releases/install.sh | ZEUDE_AGENT_KEY=zd_xxx bash
 ```
 
-### Components
+### 3. Verify
 
-| Component | Description |
-|-----------|-------------|
-| `~/.zeude/bin/claude` | Shim binary that wraps the real Claude CLI |
-| `~/.zeude/bin/zeude` | Doctor/diagnostic utility |
-| `~/.zeude/credentials` | Agent key for authentication |
-| `~/.zeude/config` | Endpoint and dashboard URL configuration |
-| `~/.claude.json` | MCP servers synced from dashboard |
-| `~/.claude/hooks/` | Hook scripts installed from dashboard |
-| `~/.claude/settings.json` | Hook registrations for Claude Code |
+```bash
+zeude doctor
+```
 
-### Sync Process
+## Project Structure
 
-When you run `claude` (or `codex`), the shim:
-
-1. Calls the dashboard API to fetch your team's configuration
-2. Syncs MCP servers to `~/.claude.json`
-3. Installs hooks to `~/.claude/hooks/{event}/`
-4. Syncs skills to `~/.claude/skills/` (Claude) or `~/.codex/skills/` (Codex)
-5. Registers hooks in `~/.claude/settings.json`
-6. Executes the real CLI binary
+```
+zeude/
+├── cmd/
+│   ├── claude/          # Claude Code shim binary
+│   ├── codex/           # OpenAI Codex shim binary
+│   ├── zeude/           # Doctor/diagnostic CLI
+│   └── doctor/          # Health check utility
+├── internal/
+│   ├── mcpconfig/       # Config sync engine (skills, hooks, MCP, agents)
+│   ├── resolver/        # Binary resolution with fork-bomb prevention
+│   ├── autoupdate/      # Self-update mechanism
+│   ├── identity/        # Cross-tool user identity resolution
+│   ├── config/          # Endpoint configuration
+│   └── otelenv/         # OTel environment variable injection
+├── dashboard/
+│   ├── src/app/         # Next.js App Router pages & API routes
+│   ├── clickhouse/      # ClickHouse schema, migrations, and tests
+│   └── supabase/        # Supabase migrations
+├── scripts/             # Build and install scripts
+├── deployments/         # OTel Collector config
+└── Dockerfile           # Multi-platform binary builder
+```
 
 ## Configuration
 
@@ -99,192 +107,82 @@ When you run `claude` (or `codex`), the shim:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ZEUDE_AGENT_KEY` | Your agent key (set during install) | - |
+| `ZEUDE_AGENT_KEY` | Agent key for authentication | — |
 | `ZEUDE_DASHBOARD_URL` | Dashboard URL | `https://your-dashboard-url` |
-| `ZEUDE_DEBUG` | Enable debug logging | `0` |
+| `ZEUDE_DEBUG` | Enable debug logging (`1` to enable) | `0` |
 
-### Files
+### Credential files
 
-**~/.zeude/credentials**
-```
+```bash
+# ~/.zeude/credentials
 agent_key=zd_your_agent_key
-```
 
-**~/.zeude/config**
-```
+# ~/.zeude/config
 endpoint=https://your-otel-collector-url/
 dashboard_url=https://your-dashboard-url
 ```
 
-## Dashboard Features
-
-### MCP Server Management
-
-Add, edit, and remove MCP servers from the dashboard. Servers are automatically synced to all team members' machines.
-
-- Global servers: Available to all users
-- Team servers: Available only to specific teams
-
-### Skill Management
-
-Distribute skills to your team from the dashboard:
-
-- Multi-file skills with folder structure support
-- Keyword-based skill suggestion via hooks
-- Per-user skill enable/disable preferences
-- Contributor tracking
-
-### Agent Profiles
-
-Centrally manage agent configurations (CLAUDE.md templates) and distribute them to team members.
-
-### Hook Management
-
-Deploy Claude Code hooks remotely:
-
-- **UserPromptSubmit**: Track all prompts sent to Claude
-- **Stop**: Actions when Claude stops
-- **PreToolUse/PostToolUse**: Before/after tool execution
-- **Notification**: Custom notifications
-
-Hooks support Bash, Python, and Node.js scripts.
-
-### Prompt Analytics
-
-The built-in Prompt Logger hook captures all prompts and stores them in ClickHouse for analysis. Use the AI chatbot to query your prompt history.
-
-### Codex Integration
-
-Monitor OpenAI Codex usage alongside Claude Code:
-
-- Unified telemetry via OTel Collector transform
-- Source-based filtering in dashboards (Claude vs Codex)
-- Shared leaderboard and cost tracking across both tools
-
-## Commands
-
-### /zeude
-
-Opens the Zeude dashboard in your browser with automatic authentication:
-
-```
-> /zeude
-```
-
-### zeude doctor
-
-Diagnose installation issues:
-
-```bash
-zeude doctor
-```
-
-## Auto-Update
-
-The CLI binary automatically checks for updates every 24 hours and self-updates when a new version is available. No action required.
-
-To check the current version:
-```bash
-zeude doctor
-```
-
-## Uninstall
-
-To completely remove Zeude from your system:
-
-```bash
-curl -fsSL https://your-dashboard-url/releases/uninstall.sh | bash
-```
-
-This will:
-- Remove the Zeude shim binary (`~/.zeude/`)
-- Remove Zeude-installed hooks (`~/.claude/hooks/`)
-- Clean up MCP server configurations (`~/.claude.json`)
-- Remove the `/zeude` skill
-- Remove PATH configuration from shell rc files
-
-## Troubleshooting
-
-### Hooks not working
-
-1. Verify hooks are installed:
-   ```bash
-   ls -la ~/.claude/hooks/
-   ```
-
-2. Check settings.json registration:
-   ```bash
-   cat ~/.claude/settings.json | jq '.hooks'
-   ```
-
-3. Enable debug logging:
-   ```bash
-   ZEUDE_DEBUG=1 claude
-   ```
-
-### MCP servers not syncing
-
-1. Check agent key:
-   ```bash
-   cat ~/.zeude/credentials
-   ```
-
-2. Test API connectivity:
-   ```bash
-   curl -H "Authorization: Bearer $(grep agent_key ~/.zeude/credentials | cut -d= -f2)" \
-     https://your-dashboard-url/api/config/_
-   ```
-
-3. Check cache:
-   ```bash
-   cat ~/.zeude/config-cache.json | jq '.config.serverCount'
-   ```
-
-### Real Claude not found
-
-The shim couldn't find the original Claude CLI. Ensure it's installed:
-
-```bash
-npm install -g @anthropic-ai/claude-code
-which claude
-```
-
 ## Development
 
-### Local Dashboard
+### Dashboard (Next.js)
 
 ```bash
 cd dashboard
-pnpm install
-pnpm dev
+npm install
+npm run dev          # http://localhost:3000
+
+# Run tests
+npm test             # 202 vitest tests
+
+# Local dev without auth/DB
+SKIP_AUTH=true MOCK_API=true npm run dev
 ```
 
-### Build Binaries
+### Go binaries
 
 ```bash
-# All platforms
-docker build -t zeude-builder .
+# Run tests
+go test ./...
 
-# Extract binaries
+# Build all binaries
+docker build -t zeude-builder .
 docker cp $(docker create zeude-builder):/app/public/releases ./releases
 ```
 
-### Environment Variables (Local Dev)
+### ClickHouse (local)
 
 ```bash
-# Skip auth for local testing
-SKIP_AUTH=true
-MOCK_EMAIL=your@email.com
+cd dashboard
+docker compose -f docker-compose.dev.yaml up -d
+# Schema auto-applied from clickhouse/init.sql
 ```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `zeude doctor` | Diagnose installation issues |
+| `/zeude` (in Claude Code) | Open dashboard with auto-login |
 
 ## Security
 
-- Agent keys are stored with 0600 permissions
+- Agent keys stored with `0600` permissions
 - All API calls use Bearer token authentication
-- Hook scripts are sandboxed with injected environment variables
-- No credentials are stored in plain text logs
+- Hook scripts run with injected environment variables
+- Config sync uses hash-based diffing (no unnecessary writes)
+- Path traversal and symlink attack prevention in file sync
 
-## Support
+## Contributing
 
-- Issues: https://github.com/ZEP-Inc/zeude/issues
-- Dashboard: https://your-dashboard-url
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feat/my-feature`)
+3. Run tests (`go test ./...` and `cd dashboard && npm test`)
+4. Submit a pull request
+
+For bugs and feature requests, please [open an issue](https://github.com/zep-us/zeude/issues).
+
+## License
+
+See [LICENSE](LICENSE) for details.
