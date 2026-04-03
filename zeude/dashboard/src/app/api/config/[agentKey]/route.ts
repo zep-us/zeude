@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase'
+import { createServerClient, isDBConnectionError } from '@/lib/supabase'
 import { rateLimit, getClientIP } from '@/lib/rate-limit'
 import { createHash } from 'crypto'
 
@@ -69,9 +69,14 @@ export async function GET(
     // Find user by agent key
     const { data: user, error: userError } = await supabase
       .from('zeude_users')
-      .select('id, email, team, status')
+      .select('id, email, team, status, disabled_skills')
       .eq('agent_key', agentKey)
       .single()
+
+    if (isDBConnectionError(userError)) {
+      console.error('DB connection failed during config fetch:', { error: userError, agentKey })
+      return Response.json({ error: 'Database connection failed. This is a server infrastructure issue.', code: 'DB_CONNECTION_ERROR' }, { status: 503 })
+    }
 
     if (userError || !user) {
       return Response.json({ error: 'Invalid agent key' }, { status: 401 })
@@ -81,31 +86,42 @@ export async function GET(
       return Response.json({ error: 'User account is inactive' }, { status: 403 })
     }
 
-    // Fetch MCP servers, skills, and hooks in parallel for better performance
-    const [serversResult, skillsResult, hooksResult] = await Promise.all([
+    // Fetch MCP servers, skills, hooks, and agents in parallel for better performance
+    // DB-level filtering by team (is_global OR team membership) for efficiency
+    const [serversResult, skillsResult, hooksResult, agentsResult] = await Promise.all([
       supabase
         .from('zeude_mcp_servers')
-        .select('id, name, command, args, env, is_global, teams')
-        .eq('status', 'active'),
+        .select('id, name, url, command, args, env, is_global, teams')
+        .eq('status', 'active')
+        .or(`is_global.eq.true,teams.cs.{"${user.team}"}`),
       supabase
         .from('zeude_skills')
-        .select('id, name, slug, description, content, is_global, teams')
-        .eq('status', 'active'),
+        .select('id, name, slug, description, content, files, is_global, teams')
+        .eq('status', 'active')
+        .or(`is_global.eq.true,teams.cs.{"${user.team}"}`),
       supabase
         .from('zeude_hooks')
         .select('id, name, event, description, script_content, script_type, env, is_global, teams')
-        .eq('status', 'active'),
+        .eq('status', 'active')
+        .or(`is_global.eq.true,teams.cs.{"${user.team}"}`),
+      supabase
+        .from('zeude_agents')
+        .select('id, name, description, files, is_global, teams')
+        .eq('status', 'active')
+        .or(`is_global.eq.true,teams.cs.{"${user.team}"}`),
     ])
 
-    let { data: servers, error: serversError } = serversResult
-    let { data: skills, error: skillsError } = skillsResult
-    let { data: hooks, error: hooksError } = hooksResult
+    const { data: servers, error: serversError } = serversResult
+    const { data: skills, error: skillsError } = skillsResult
+    const { data: hooks, error: hooksError } = hooksResult
+    const { data: agents, error: agentsError } = agentsResult
 
     // Sort arrays by ID for deterministic hash generation
     // Without sorting, DB may return rows in different order causing hash mismatch
     servers?.sort((a, b) => a.id.localeCompare(b.id))
     skills?.sort((a, b) => a.id.localeCompare(b.id))
     hooks?.sort((a, b) => a.id.localeCompare(b.id))
+    agents?.sort((a, b) => a.id.localeCompare(b.id))
 
     if (serversError) {
       console.error('Failed to fetch MCP servers:', serversError)
@@ -122,15 +138,16 @@ export async function GET(
       // Non-fatal: continue without hooks
     }
 
-    // Filter servers: global OR user's team in teams array
-    const applicableServers = (servers || []).filter(server => {
-      if (server.is_global) return true
-      if (Array.isArray(server.teams) && server.teams.includes(user.team)) return true
-      return false
-    })
+    if (agentsError) {
+      console.error('Failed to fetch agents:', agentsError)
+      // Non-fatal: continue without agents
+    }
+
+    // Servers already filtered at DB level
+    const applicableServers = servers || []
 
     // Format as claude.json mcpServers format
-    const mcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {}
+    const mcpServers: Record<string, { type?: string; url?: string; command?: string; args?: string[]; env?: Record<string, string> }> = {}
     const usedKeys = new Set<string>()
 
     for (const server of applicableServers) {
@@ -146,41 +163,42 @@ export async function GET(
       }
       usedKeys.add(serverKey)
 
-      mcpServers[serverKey] = {
-        command: server.command,
-        args: server.args || [],
-      }
+      // URL-based server: include type and url fields (type is required by Claude Code)
+      if (server.url) {
+        mcpServers[serverKey] = { type: 'http', url: server.url }
+      } else {
+        mcpServers[serverKey] = {
+          command: server.command,
+          args: server.args || [],
+        }
 
-      // Only include env if it has values
-      if (server.env && Object.keys(server.env).length > 0) {
-        mcpServers[serverKey].env = server.env
+        // Only include env if it has values
+        if (server.env && Object.keys(server.env).length > 0) {
+          mcpServers[serverKey].env = server.env
+        }
       }
     }
 
-    // Filter skills: global OR user's team in teams array
-    const applicableSkills = (skills || []).filter(skill => {
-      if (skill.is_global) return true
-      if (Array.isArray(skill.teams) && skill.teams.includes(user.team)) return true
-      return false
-    })
+    // Skills already filtered at DB level; additionally filter out user's disabled skills
+    const userDisabledSkills: string[] = user.disabled_skills ?? []
+    const applicableSkills = skillsError ? null : (skills || []).filter(
+      s => !userDisabledSkills.includes(s.slug)
+    )
 
-    // Format skills for CLI
-    const skillsList = applicableSkills.map(skill => ({
+    // Format skills for CLI (include files for multi-file support, keep content for backward compat)
+    const skillsList = applicableSkills ? applicableSkills.map(skill => ({
       name: skill.name,
       slug: skill.slug,
       description: skill.description,
       content: skill.content,
-    }))
+      files: skill.files || null,
+    })) : null
 
-    // Filter hooks: global OR user's team in teams array
-    const applicableHooks = (hooks || []).filter(hook => {
-      if (hook.is_global) return true
-      if (Array.isArray(hook.teams) && hook.teams.includes(user.team)) return true
-      return false
-    })
+    // Hooks already filtered at DB level
+    const applicableHooks = hooksError ? null : (hooks || [])
 
     // Format hooks for CLI
-    const hooksList = applicableHooks.map(hook => ({
+    const hooksList = applicableHooks ? applicableHooks.map(hook => ({
       id: hook.id,
       name: hook.name,
       event: hook.event,
@@ -188,13 +206,24 @@ export async function GET(
       script: hook.script_content,
       scriptType: hook.script_type,
       env: hook.env || {},
-    }))
+    })) : null
+
+    // Agents already filtered at DB level
+    const applicableAgents = agentsError ? null : (agents || [])
+
+    // Format agents for CLI
+    const agentsList = applicableAgents ? applicableAgents.map(agent => ({
+      name: agent.name,
+      description: agent.description,
+      files: agent.files,
+    })) : null
 
     // Compute category-level hashes for efficient sync (Merkle-tree style)
     const mcpServersHash = stableHash(mcpServers)
     const skillsHash = stableHash(skillsList)
     const hooksHash = stableHash(hooksList)
-    const rootHash = stableHash({ mcpServers: mcpServersHash, skills: skillsHash, hooks: hooksHash })
+    const agentsHash = stableHash(agentsList)
+    const rootHash = stableHash({ mcpServers: mcpServersHash, skills: skillsHash, hooks: hooksHash, agents: agentsHash })
 
     // Check If-None-Match header for conditional request (ETag support)
     const clientETag = req.headers.get('If-None-Match')
@@ -210,17 +239,20 @@ export async function GET(
       mcpServers,
       skills: skillsList,
       hooks: hooksList,
+      agents: agentsList,
       // Merkle-tree style hashes for efficient sync
       hashes: {
         root: rootHash,
         mcpServers: mcpServersHash,
         skills: skillsHash,
         hooks: hooksHash,
+        agents: agentsHash,
       },
       configVersion: rootHash,  // Root hash as version (replaces timestamp)
       serverCount: applicableServers.length,
-      skillCount: skillsList.length,
-      hookCount: hooksList.length,
+      skillCount: skillsList?.length ?? null,
+      hookCount: hooksList?.length ?? null,
+      agentCount: agentsList?.length ?? null,
       // User info for hook env var injection and OTEL telemetry
       userId: user.id,  // Supabase UUID - used to match ClickHouse data with Supabase
       userEmail: user.email,

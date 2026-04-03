@@ -10,7 +10,7 @@ export type Json =
   | Json[]
 
 export type UserRole = 'admin' | 'member'
-export type UserStatus = 'active' | 'inactive'
+export type UserStatus = 'active' | 'inactive' | 'deleted'
 export type MCPServerStatus = 'active' | 'inactive'
 
 export interface Database {
@@ -25,6 +25,7 @@ export interface Database {
           team: string
           role: UserRole
           status: UserStatus
+          disabled_skills: string[]
           invited_by: string | null
           created_at: string
           updated_at: string
@@ -37,6 +38,7 @@ export interface Database {
           team?: string
           role?: UserRole
           status?: UserStatus
+          disabled_skills?: string[]
           invited_by?: string | null
           created_at?: string
           updated_at?: string
@@ -49,6 +51,7 @@ export interface Database {
           team?: string
           role?: UserRole
           status?: UserStatus
+          disabled_skills?: string[]
           invited_by?: string | null
           created_at?: string
           updated_at?: string
@@ -139,6 +142,7 @@ export interface Database {
         Row: {
           id: string
           name: string
+          url: string | null
           command: string
           args: string[]
           env: Record<string, string>
@@ -152,7 +156,8 @@ export interface Database {
         Insert: {
           id?: string
           name: string
-          command: string
+          url?: string | null
+          command?: string
           args?: string[]
           env?: Record<string, string>
           teams?: string[]
@@ -165,6 +170,7 @@ export interface Database {
         Update: {
           id?: string
           name?: string
+          url?: string | null
           command?: string
           args?: string[]
           env?: Record<string, string>
@@ -208,7 +214,8 @@ export interface Skill {
   name: string
   slug: string
   description: string | null
-  content: string
+  content: string | null
+  files?: Record<string, string>  // JSONB: {"SKILL.md": "content", "docs/ref.md": "content"}
   teams: string[]
   is_global: boolean
   status: SkillStatus
@@ -222,16 +229,22 @@ export interface Skill {
   hint: string | null // Guidance for Claude when skill is suggested
   is_general: boolean // Always show in skill hints
   is_command: boolean // Exclude from skill-rules if true
+  contributors: string[] // UUIDs of contributing users
+  // Enriched by API (not stored in DB)
+  created_by_name?: string | null
+  contributor_names?: string[]
 }
 
 export interface NewSkill {
   name: string
   slug: string
   description?: string | null
-  content: string
+  content: string | null
+  files?: Record<string, string>
   teams?: string[]
   is_global?: boolean
   status?: SkillStatus
+  contributors?: string[]
   created_by?: string | null
 }
 
@@ -240,9 +253,11 @@ export interface UpdateSkill {
   slug?: string
   description?: string | null
   content?: string
+  files?: Record<string, string>
   teams?: string[]
   is_global?: boolean
   status?: SkillStatus
+  contributors?: string[]
 }
 
 // Hooks types
@@ -289,4 +304,39 @@ export interface UpdateHook {
   teams?: string[]
   is_global?: boolean
   status?: HookStatus
+}
+
+// Agent types
+export type AgentStatus = 'active' | 'inactive'
+
+export interface Agent {
+  id: string
+  name: string  // kebab-case identifier, also used as filename
+  description: string | null
+  files: Record<string, string>  // JSONB: {"{name}.md": "content"}
+  teams: string[]
+  is_global: boolean
+  status: AgentStatus
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface NewAgent {
+  name: string
+  description?: string | null
+  files: Record<string, string>
+  teams?: string[]
+  is_global?: boolean
+  status?: AgentStatus
+  created_by?: string | null
+}
+
+export interface UpdateAgent {
+  name?: string
+  description?: string | null
+  files?: Record<string, string>
+  teams?: string[]
+  is_global?: boolean
+  status?: AgentStatus
 }

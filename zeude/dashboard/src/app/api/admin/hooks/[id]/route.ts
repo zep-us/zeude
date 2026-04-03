@@ -7,7 +7,7 @@ const MAX_SCRIPT_SIZE = 100 * 1024
 // Valid Claude Code hook events
 const VALID_EVENTS = ['UserPromptSubmit', 'Stop', 'PreToolUse', 'PostToolUse', 'Notification', 'SubagentStop']
 
-// PATCH: Update hook
+// PATCH: Update hook (authenticated)
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -17,10 +17,6 @@ export async function PATCH(
 
     if (!session) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 
     const { id } = await params
@@ -48,8 +44,11 @@ export async function PATCH(
     if (scriptContent !== undefined) updateData.script_content = scriptContent
     if (scriptType !== undefined) updateData.script_type = scriptType
     if (env !== undefined) updateData.env = env
-    if (teams !== undefined) updateData.teams = teams
-    if (isGlobal !== undefined) updateData.is_global = isGlobal
+    if (isGlobal !== undefined) {
+      updateData.is_global = isGlobal
+      if (isGlobal) updateData.teams = []
+    }
+    if (teams !== undefined && !isGlobal) updateData.teams = teams
     if (status !== undefined) updateData.status = status
 
     const { data: hook, error } = await supabase
@@ -71,7 +70,7 @@ export async function PATCH(
   }
 }
 
-// DELETE: Delete hook
+// DELETE: Delete hook (authenticated)
 export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -81,10 +80,6 @@ export async function DELETE(
 
     if (!session) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 
     const { id } = await params

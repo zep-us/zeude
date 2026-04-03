@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase'
+import { createServerClient, isDBConnectionError } from '@/lib/supabase'
 import { randomBytes } from 'crypto'
 import { rateLimit, getClientIP } from '@/lib/rate-limit'
 
@@ -43,8 +43,13 @@ export async function POST(req: Request) {
       .eq('agent_key', agentKey)
       .single()
 
+    if (isDBConnectionError(error)) {
+      console.error('DB connection failed during user lookup:', { error, agentKey })
+      return Response.json({ error: 'Database connection failed. This is a server infrastructure issue.', code: 'DB_CONNECTION_ERROR' }, { status: 503 })
+    }
+
     if (error || !user) {
-      console.error('User lookup failed:', { error, user, agentKey: '[REDACTED]' })
+      console.error('User lookup failed:', { error, user, agentKey })
       return Response.json({ error: 'Invalid agent key', debug: error?.message || 'User not found' }, { status: 401 })
     }
 
@@ -58,6 +63,11 @@ export async function POST(req: Request) {
       user_id: user.id,
       expires_at: expiresAt.toISOString(),
     })
+
+    if (isDBConnectionError(insertError)) {
+      console.error('DB connection failed during OTT insert:', { error: insertError })
+      return Response.json({ error: 'Database connection failed. This is a server infrastructure issue.', code: 'DB_CONNECTION_ERROR' }, { status: 503 })
+    }
 
     if (insertError) {
       console.error('Failed to create OTT:', insertError)

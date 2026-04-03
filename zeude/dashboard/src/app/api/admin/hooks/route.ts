@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
+import { fetchHooksData } from '@/lib/data/admin-hooks'
 
 // Maximum script content size: 100KB
 const MAX_SCRIPT_SIZE = 100 * 1024
@@ -7,110 +8,31 @@ const MAX_SCRIPT_SIZE = 100 * 1024
 // Valid Claude Code hook events
 const VALID_EVENTS = ['UserPromptSubmit', 'Stop', 'PreToolUse', 'PostToolUse', 'Notification', 'SubagentStop']
 
-// GET: List all hooks
+// GET: List all hooks (authenticated)
 export async function GET() {
   try {
-    const session = await getSession()
-
-    if (!session) {
-      return Response.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
-    }
-
-    const supabase = createServerClient()
-
-    const { data: hooks, error } = await supabase
-      .from('zeude_hooks')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Failed to fetch hooks:', error)
-      return Response.json({ error: 'Failed to fetch hooks' }, { status: 500 })
-    }
-
-    // Get unique teams and users for filter dropdown
-    const { data: usersData } = await supabase
-      .from('zeude_users')
-      .select('id, name, email, team')
-      .order('team')
-
-    const teams = [...new Set(usersData?.map(u => u.team) || [])]
-    const users = usersData || []
-
-    // Get install status for all hooks
-    const { data: installStatus } = await supabase
-      .from('zeude_hook_install_status')
-      .select('user_id, hook_id, installed, version, last_checked_at')
-
-    // Pre-compute maps for O(1) lookups (instead of O(N*M) nested loops)
-    const userMap = new Map(users.map(u => [u.id, u]))
-    const installStatusArray = installStatus || []
-    const statusByHookId = installStatusArray.reduce((acc, s) => {
-      if (!acc[s.hook_id]) acc[s.hook_id] = []
-      acc[s.hook_id].push(s)
-      return acc
-    }, {} as Record<string, typeof installStatusArray>)
-
-    // Group install status by hook
-    const installStatusByHook: Record<string, {
-      installed: number
-      total: number
-      details: Array<{
-        userId: string
-        userName: string
-        installed: boolean
-        version: string | null
-        lastCheckedAt: string | null
-      }>
-    }> = {}
-
-    for (const hook of hooks || []) {
-      const hookStatus = statusByHookId[hook.id] || []
-
-      // Get applicable users (global or team-matched)
-      const applicableUsers = users.filter(u => {
-        if (hook.is_global) return true
-        return hook.teams.includes(u.team)
-      })
-
-      installStatusByHook[hook.id] = {
-        installed: hookStatus.filter(s => s.installed).length,
-        total: applicableUsers.length,
-        details: applicableUsers.map(u => {
-          const status = hookStatus.find(s => s.user_id === u.id)
-          return {
-            userId: u.id,
-            userName: userMap.get(u.id)?.name || u.email,
-            installed: status?.installed || false,
-            version: status?.version || null,
-            lastCheckedAt: status?.last_checked_at || null,
-          }
-        }),
-      }
-    }
-
-    return Response.json({ hooks, teams, installStatus: installStatusByHook })
+    const data = await fetchHooksData()
+    return Response.json(data)
   } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal server error'
+    if (message === 'Not authenticated') {
+      return Response.json({ error: message }, { status: 401 })
+    }
+    if (message === 'Admin access required') {
+      return Response.json({ error: message }, { status: 403 })
+    }
     console.error('Hooks list error:', err)
-    return Response.json({ error: 'Internal server error' }, { status: 500 })
+    return Response.json({ error: 'Failed to fetch hooks' }, { status: 500 })
   }
 }
 
-// POST: Create new hook
+// POST: Create new hook (authenticated)
 export async function POST(req: Request) {
   try {
     const session = await getSession()
 
     if (!session) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 
     const body = await req.json()

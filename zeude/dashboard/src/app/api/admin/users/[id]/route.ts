@@ -1,6 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
-import { getClickHouseClient } from '@/lib/clickhouse'
 
 // UUID v4 validation regex
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -88,14 +87,32 @@ export async function PATCH(
       return Response.json({ error: 'No valid fields to update' }, { status: 400 })
     }
 
+    // Validate team name format if provided
+    // Prevents PostgREST filter injection when team is used in .or() queries
+    if (updates.team && !/^[A-Za-z0-9_-]+$/.test(updates.team)) {
+      return Response.json({ error: 'Team name must contain only letters, numbers, hyphens, and underscores' }, { status: 400 })
+    }
+
     // Validate role
     if (updates.role && !['admin', 'member'].includes(updates.role)) {
       return Response.json({ error: 'Role must be admin or member' }, { status: 400 })
     }
 
-    // Validate status
+    // Validate status (deleted is only set via DELETE endpoint)
     if (updates.status && !['active', 'inactive'].includes(updates.status)) {
       return Response.json({ error: 'Status must be active or inactive' }, { status: 400 })
+    }
+
+    // Prevent restoring a deleted user via PATCH
+    const supabaseCheck = createServerClient()
+    const { data: targetUser } = await supabaseCheck
+      .from('zeude_users')
+      .select('status')
+      .eq('id', id)
+      .single()
+
+    if (targetUser?.status === 'deleted') {
+      return Response.json({ error: 'Cannot modify a deleted user' }, { status: 400 })
     }
 
     // Prevent admin from demoting themselves
@@ -129,7 +146,7 @@ export async function PATCH(
   }
 }
 
-// DELETE: Hard delete user and all associated data
+// DELETE: Soft delete user (set status to 'deleted')
 export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -158,56 +175,17 @@ export async function DELETE(
 
     const supabase = createServerClient()
 
-    // 1. Get user info for ClickHouse deletion
-    const { data: user, error: fetchError } = await supabase
+    const { data: user, error } = await supabase
       .from('zeude_users')
-      .select('id, email')
+      .update({ status: 'deleted', updated_at: new Date().toISOString() })
       .eq('id', id)
+      .neq('status', 'deleted')
+      .select('id, email, name, status')
       .single()
 
-    if (fetchError || !user) {
-      return Response.json({ error: 'User not found' }, { status: 404 })
-    }
-
-    // 2. Update skills created_by to NULL (before deleting user)
-    const { error: skillsError } = await supabase
-      .from('zeude_skills')
-      .update({ created_by: null })
-      .eq('created_by', id)
-
-    if (skillsError) {
-      console.error('Failed to update skills:', skillsError)
-      // Continue with deletion - skills update is not critical
-    }
-
-    // 3. Delete ClickHouse event/log data
-    const clickhouse = getClickHouseClient()
-    if (clickhouse) {
-      try {
-        await clickhouse.command({
-          query: `
-            ALTER TABLE claude_code_logs DELETE WHERE
-              LogAttributes['user.email'] = {userEmail:String}
-              OR ResourceAttributes['zeude.user.email'] = {userEmail:String}
-              OR ResourceAttributes['zeude.user.id'] = {userId:String}
-          `,
-          query_params: { userEmail: user.email, userId: user.id },
-        })
-      } catch (chError) {
-        console.error('Failed to delete ClickHouse data:', chError)
-        // Continue with deletion - CH data is not critical for user deletion
-      }
-    }
-
-    // 4. Delete user from Supabase (cascades to sessions, tokens, install_status)
-    const { error: deleteError } = await supabase
-      .from('zeude_users')
-      .delete()
-      .eq('id', id)
-
-    if (deleteError) {
-      console.error('Failed to delete user:', deleteError)
-      return Response.json({ error: 'Failed to delete user' }, { status: 500 })
+    if (error || !user) {
+      console.error('Failed to delete user:', error)
+      return Response.json({ error: 'User not found or already deleted' }, { status: 404 })
     }
 
     return Response.json({ success: true })

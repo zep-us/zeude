@@ -1,51 +1,28 @@
 import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
-import { hasAllowedTools, generateSkillRules } from '@/lib/skill-utils'
+import { hasAllowedTools } from '@/lib/skill-utils'
+import { validateFiles } from '@/lib/file-validation'
+import { fetchSkillsData } from '@/lib/data/admin-skills'
 
-// Maximum content size: 100KB
-const MAX_CONTENT_SIZE = 100 * 1024
-
-// GET: List all Skills
+// GET: List all Skills (authenticated)
 export async function GET() {
   try {
-    const session = await getSession()
-
-    if (!session) {
-      return Response.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
-    }
-
-    const supabase = createServerClient()
-
-    const { data: skills, error } = await supabase
-      .from('zeude_skills')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Failed to fetch skills:', error)
-      return Response.json({ error: 'Failed to fetch skills' }, { status: 500 })
-    }
-
-    // Get unique teams for filter dropdown
-    const { data: usersData } = await supabase
-      .from('zeude_users')
-      .select('team')
-      .order('team')
-
-    const teams = [...new Set(usersData?.map(u => u.team) || [])]
-
-    return Response.json({ skills, teams })
+    const data = await fetchSkillsData()
+    return Response.json(data)
   } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal server error'
+    if (message === 'Not authenticated') {
+      return Response.json({ error: message }, { status: 401 })
+    }
+    if (message === 'Admin access required') {
+      return Response.json({ error: message }, { status: 403 })
+    }
     console.error('Skills list error:', err)
-    return Response.json({ error: 'Internal server error' }, { status: 500 })
+    return Response.json({ error: 'Failed to fetch skills' }, { status: 500 })
   }
 }
 
-// POST: Create new Skill
+// POST: Create new Skill (authenticated)
 export async function POST(req: Request) {
   try {
     const session = await getSession()
@@ -54,12 +31,13 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
-    }
-
     const body = await req.json()
-    const { name, slug, description, content, teams = [], isGlobal = false, isGeneral = false } = body
+    const {
+      name, slug, description, files,
+      teams = [], isGlobal = false, isGeneral = false,
+      primaryKeywords, secondaryKeywords, hint,
+      contributors,
+    } = body
 
     if (!name || typeof name !== 'string') {
       return Response.json({ error: 'Name is required' }, { status: 400 })
@@ -74,34 +52,43 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Slug must be kebab-case (e.g., my-skill-name)' }, { status: 400 })
     }
 
-    if (!content || typeof content !== 'string') {
-      return Response.json({ error: 'Content is required' }, { status: 400 })
+    // New skills: files is the source of truth, content is not used
+    if (!files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length === 0) {
+      return Response.json({ error: 'Files is required (must include at least SKILL.md)' }, { status: 400 })
     }
 
-    // Validate content size to prevent DoS
-    if (content.length > MAX_CONTENT_SIZE) {
-      return Response.json({
-        error: `Content too large. Maximum size is ${MAX_CONTENT_SIZE / 1024}KB`
-      }, { status: 400 })
+    if (!files['SKILL.md'] || typeof files['SKILL.md'] !== 'string') {
+      return Response.json({ error: 'Files must include SKILL.md' }, { status: 400 })
+    }
+
+    // Validate each file path and content (same as agents — proposal §3.2)
+    const validation = validateFiles(files)
+    if (!validation.valid) {
+      return Response.json({ error: validation.error }, { status: 400 })
     }
 
     const supabase = createServerClient()
 
     // Check if this is a command (has allowed-tools) - skip LLM generation
-    const isCommand = hasAllowedTools(content)
+    const isCommand = hasAllowedTools(files['SKILL.md'])
 
-    // Initial insert
+    // New skills: content = NULL (old shim gracefully skips, new shim uses files)
     const { data: skill, error } = await supabase
       .from('zeude_skills')
       .insert({
         name,
         slug,
         description: description || null,
-        content,
+        content: null,
+        files,
         teams: isGlobal ? [] : teams,
         is_global: isGlobal,
         is_general: isGeneral,
         is_command: isCommand,
+        primary_keywords: primaryKeywords || [],
+        secondary_keywords: secondaryKeywords || [],
+        hint: hint || '',
+        contributors: Array.isArray(contributors) ? contributors : [],
         status: 'active',
         created_by: session.user.id,
       })
@@ -112,34 +99,14 @@ export async function POST(req: Request) {
       if (error.code === '23505') {
         return Response.json({ error: 'A skill with this slug already exists' }, { status: 400 })
       }
+      if (error.code === '23514') {
+        return Response.json({ error: 'Invalid skill data: check files size (max 5MB total)' }, { status: 400 })
+      }
       console.error('Failed to create skill:', error)
       return Response.json({ error: 'Failed to create skill' }, { status: 500 })
     }
 
-    // Generate keywords and hint using LLM (only for non-command skills)
-    let updatedSkill = skill
-    if (!isCommand) {
-      try {
-        const rules = await generateSkillRules(name, description, content)
-
-        // Update skill with generated rules
-        await supabase
-          .from('zeude_skills')
-          .update({
-            keywords: rules.keywords,
-            hint: rules.hint,
-          })
-          .eq('id', skill.id)
-
-        // Create new object instead of mutating DB response
-        updatedSkill = { ...skill, keywords: rules.keywords, hint: rules.hint }
-      } catch (err) {
-        console.error('Failed to generate skill rules:', err)
-        // Non-fatal: skill is created, just without auto-generated rules
-      }
-    }
-
-    return Response.json({ skill: updatedSkill })
+    return Response.json({ skill })
   } catch (err) {
     console.error('Skill create error:', err)
     return Response.json({ error: 'Internal server error' }, { status: 500 })

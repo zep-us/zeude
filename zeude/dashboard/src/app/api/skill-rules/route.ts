@@ -12,6 +12,32 @@ interface SkillRule {
   description: string
 }
 
+function normalizeKeywords(keywords: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+
+  for (const raw of keywords) {
+    if (typeof raw !== 'string') continue
+    const normalized = raw.trim().toLowerCase()
+    if (!normalized) continue
+    if (seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+
+  return result
+}
+
+function fallbackPrimaryKeywords(slug: string): string[] {
+  const tokens = slug
+    .toLowerCase()
+    .split(/[-_/]/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2)
+
+  return normalizeKeywords([slug, ...tokens])
+}
+
 // GET: Fetch skill rules for hook matching
 export async function GET(req: Request) {
   try {
@@ -52,14 +78,14 @@ export async function GET(req: Request) {
     }
 
     // Fetch skills with rules - filter at SQL level for efficiency
-    // Exclude commands (is_command = true) and only fetch needed columns
+    // Include command-style skills as well so guidance can suggest all installed skills.
+    // Keep column selection minimal for performance.
     const { data: skills, error: skillsError } = await supabase
       .from('zeude_skills')
       .select(
         'slug, description, keywords, primary_keywords, secondary_keywords, hint, is_general, is_global, teams'
       )
       .eq('status', 'active')
-      .eq('is_command', false)
       .or(`is_global.eq.true,teams.cs.{${user.team || ''}}`)
 
     if (skillsError) {
@@ -69,7 +95,7 @@ export async function GET(req: Request) {
 
     const applicableSkills = skills || []
 
-    // Build skill-rules.json format (commands already filtered at SQL level)
+    // Build skill-rules.json format
     // Also exclude skills in EXCLUDED_SKILLS list
     const rules: Record<string, SkillRule> = {}
 
@@ -79,20 +105,22 @@ export async function GET(req: Request) {
         continue
       }
 
-      // Get tier keywords, falling back to legacy keywords for backward compatibility
-      // Explicit null checks to handle PostgreSQL null array values
-      const primaryKeywords =
+      const legacyKeywords = normalizeKeywords(skill.keywords ?? [])
+      const rawPrimary =
         skill.primary_keywords && skill.primary_keywords.length > 0
           ? skill.primary_keywords
           : skill.keywords ?? []
-      const secondaryKeywords = skill.secondary_keywords ?? []
+      const primaryKeywords = normalizeKeywords(rawPrimary)
+      const secondaryKeywords = normalizeKeywords(skill.secondary_keywords ?? [])
+      const fallbackPrimary = primaryKeywords.length > 0 ? primaryKeywords : fallbackPrimaryKeywords(skill.slug)
+      const uniqueSecondary = secondaryKeywords.filter((kw) => !fallbackPrimary.includes(kw))
 
       rules[skill.slug] = {
         isGeneral: skill.is_general || false,
-        keywords: skill.keywords || [], // Deprecated but kept for old hooks
-        primaryKeywords,
-        secondaryKeywords,
-        hint: skill.hint || skill.description || '',
+        keywords: legacyKeywords, // Deprecated but kept for old hooks
+        primaryKeywords: fallbackPrimary,
+        secondaryKeywords: uniqueSecondary,
+        hint: skill.hint || skill.description || `Use /${skill.slug}`,
         description: skill.description || '',
       }
     }

@@ -20,6 +20,12 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Team is required' }, { status: 400 })
     }
 
+    // Validate team name format: alphanumeric, hyphens, underscores only
+    // Prevents PostgREST filter injection when team is used in .or() queries
+    if (!/^[A-Za-z0-9_-]+$/.test(team)) {
+      return Response.json({ error: 'Team name must contain only letters, numbers, hyphens, and underscores' }, { status: 400 })
+    }
+
     if (role !== 'admin' && role !== 'member') {
       return Response.json({ error: 'Role must be admin or member' }, { status: 400 })
     }

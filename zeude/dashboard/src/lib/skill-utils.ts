@@ -4,7 +4,12 @@
 
 // Skills excluded from suggestions and leaderboard stats
 // These are internal/testing skills that shouldn't count towards user metrics
-export const EXCLUDED_SKILLS = ['rate-limit-options'] as const
+export const EXCLUDED_SKILLS = [
+  'rate-limit-options',
+  'zeude',
+  'Users',
+  'users',
+] as const
 
 // Check if skill content has allowed-tools (making it a command, not a skill)
 export function hasAllowedTools(content: string): boolean {
@@ -89,7 +94,7 @@ Generate keywords and hint for this skill.`
       headers: {
         'Authorization': `Bearer ${openRouterKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+        'HTTP-Referer': 'https://zeude.zep.us',
       },
       body: JSON.stringify(payload),
       signal: controller.signal,

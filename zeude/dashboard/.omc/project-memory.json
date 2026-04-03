@@ -1,0 +1,361 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1772888508542,
+  "projectRoot": "/Users/jihyun/Desktop/zeude-internal/zeude/dashboard",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "next",
+        "version": "16.1.5",
+        "category": "fullstack"
+      },
+      {
+        "name": "react",
+        "version": "19.2.3",
+        "category": "frontend"
+      },
+      {
+        "name": "react-dom",
+        "version": "19.2.3",
+        "category": "frontend"
+      }
+    ],
+    "packageManager": "pnpm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "pnpm build",
+    "testCommand": null,
+    "lintCommand": "pnpm lint",
+    "devCommand": "pnpm dev",
+    "scripts": {
+      "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' next dev",
+      "build": "next build",
+      "start": "next start",
+      "lint": "eslint"
+    }
+  },
+  "conventions": {
+    "namingStyle": "camelCase",
+    "importStyle": "ES modules",
+    "testPattern": null,
+    "fileOrganization": "type-based"
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "public",
+      "scripts",
+      "src"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "clickhouse": {
+      "path": "clickhouse",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1772888508518,
+      "keyFiles": [
+        "init.sql"
+      ]
+    },
+    "public": {
+      "path": "public",
+      "purpose": "Public files",
+      "fileCount": 7,
+      "lastAccessed": 1772888508518,
+      "keyFiles": [
+        "Zep-logo-full.svg",
+        "favicon.ico",
+        "file.svg",
+        "globe.svg",
+        "next.svg"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1772888508524,
+      "keyFiles": [
+        "backfill-skill-rules.ts"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1772888508525,
+      "keyFiles": [
+        "middleware.ts"
+      ]
+    },
+    "supabase": {
+      "path": "supabase",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1772888508525,
+      "keyFiles": [
+        "config.toml"
+      ]
+    },
+    "clickhouse/migrations": {
+      "path": "clickhouse/migrations",
+      "purpose": "Database migrations",
+      "fileCount": 9,
+      "lastAccessed": 1772888508526,
+      "keyFiles": [
+        "001_token_usage_hourly.sql",
+        "002_efficiency_metrics.sql",
+        "003_retry_density.sql"
+      ]
+    },
+    "src/app": {
+      "path": "src/app",
+      "purpose": "Application code",
+      "fileCount": 3,
+      "lastAccessed": 1772888508526,
+      "keyFiles": [
+        "favicon.ico",
+        "globals.css",
+        "layout.tsx"
+      ]
+    },
+    "src/components": {
+      "path": "src/components",
+      "purpose": "UI components",
+      "fileCount": 0,
+      "lastAccessed": 1772888508526,
+      "keyFiles": []
+    },
+    "src/lib": {
+      "path": "src/lib",
+      "purpose": "Library code",
+      "fileCount": 13,
+      "lastAccessed": 1772888508526,
+      "keyFiles": [
+        "clickhouse.ts",
+        "database.types.ts",
+        "efficiency.ts"
+      ]
+    },
+    "supabase/migrations": {
+      "path": "supabase/migrations",
+      "purpose": "Database migrations",
+      "fileCount": 17,
+      "lastAccessed": 1772888508526,
+      "keyFiles": [
+        "20250106000001_fix_update_checker_hook.sql",
+        "20250114000001_update_prompt_logger_with_uuid.sql",
+        "20250119000001_skill_suggester_hook.sql"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src/app/(admin)/admin/skills/skill-file-editor.tsx",
+      "accessCount": 41,
+      "lastAccessed": 1772939879645,
+      "type": "file"
+    },
+    {
+      "path": "src/app/api/admin/skills/route.ts",
+      "accessCount": 10,
+      "lastAccessed": 1772940897899,
+      "type": "file"
+    },
+    {
+      "path": "src/app/(admin)/admin/agents/page.tsx",
+      "accessCount": 10,
+      "lastAccessed": 1772940905789,
+      "type": "file"
+    },
+    {
+      "path": "src/app/(admin)/admin/skills/skill-dialog.tsx",
+      "accessCount": 7,
+      "lastAccessed": 1772940780422,
+      "type": "file"
+    },
+    {
+      "path": "src/app/api/admin/skills/[id]/route.ts",
+      "accessCount": 5,
+      "lastAccessed": 1772940898700,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/database.types.ts",
+      "accessCount": 4,
+      "lastAccessed": 1772940938872,
+      "type": "file"
+    },
+    {
+      "path": "src/app/(admin)/admin/mcp/mcp-dialog.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1773736228674,
+      "type": "file"
+    },
+    {
+      "path": "src/app/api/admin/invites/route.ts",
+      "accessCount": 3,
+      "lastAccessed": 1772940076111,
+      "type": "directory"
+    },
+    {
+      "path": "src/app/api/admin/users/[id]/route.ts",
+      "accessCount": 3,
+      "lastAccessed": 1772940081834,
+      "type": "directory"
+    },
+    {
+      "path": "src/app/(admin)/admin/skills/use-skill-state.ts",
+      "accessCount": 3,
+      "lastAccessed": 1772940799613,
+      "type": "file"
+    },
+    {
+      "path": "supabase/migrations/20260305000001_skills_files_column.sql",
+      "accessCount": 3,
+      "lastAccessed": 1772940904223,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 2,
+      "lastAccessed": 1772940045076,
+      "type": "directory"
+    },
+    {
+      "path": "src/app/api/admin/agents/route.ts",
+      "accessCount": 2,
+      "lastAccessed": 1772940898903,
+      "type": "file"
+    },
+    {
+      "path": "src/app/api/config/[agentKey]/route.ts",
+      "accessCount": 2,
+      "lastAccessed": 1773736230229,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 1,
+      "lastAccessed": 1772891551283,
+      "type": "directory"
+    },
+    {
+      "path": "supabase/migrations/20250120000001_skill_rules.sql",
+      "accessCount": 1,
+      "lastAccessed": 1772891563502,
+      "type": "file"
+    },
+    {
+      "path": "supabase/migrations/20250121000001_skill_keywords_tier.sql",
+      "accessCount": 1,
+      "lastAccessed": 1772891632786,
+      "type": "file"
+    },
+    {
+      "path": "supabase/migrations/20250121000002_skill_hint_2tier.sql",
+      "accessCount": 1,
+      "lastAccessed": 1772891633307,
+      "type": "file"
+    },
+    {
+      "path": "src/app/(admin)/admin/skills",
+      "accessCount": 1,
+      "lastAccessed": 1772891783464,
+      "type": "directory"
+    },
+    {
+      "path": "supabase/migrations",
+      "accessCount": 1,
+      "lastAccessed": 1772939648882,
+      "type": "directory"
+    },
+    {
+      "path": "supabase",
+      "accessCount": 1,
+      "lastAccessed": 1772939649000,
+      "type": "directory"
+    },
+    {
+      "path": "supabase/migrations/20260305000001b_skills_files_constraints.sql",
+      "accessCount": 1,
+      "lastAccessed": 1772939667406,
+      "type": "file"
+    },
+    {
+      "path": "src/app/api/admin",
+      "accessCount": 1,
+      "lastAccessed": 1772940041193,
+      "type": "directory"
+    },
+    {
+      "path": "src/app/api",
+      "accessCount": 1,
+      "lastAccessed": 1772940045902,
+      "type": "directory"
+    },
+    {
+      "path": "src/app/api/admin/agents/[id]/route.ts",
+      "accessCount": 1,
+      "lastAccessed": 1772940899166,
+      "type": "file"
+    },
+    {
+      "path": "supabase/migrations/20260305000002_agents_table.sql",
+      "accessCount": 1,
+      "lastAccessed": 1772940904671,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/file-validation.ts",
+      "accessCount": 1,
+      "lastAccessed": 1772940905119,
+      "type": "file"
+    },
+    {
+      "path": "src/components/admin/nav.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772940911931,
+      "type": "file"
+    },
+    {
+      "path": "src/app/(admin)/admin/skills/types.ts",
+      "accessCount": 1,
+      "lastAccessed": 1772940912308,
+      "type": "file"
+    },
+    {
+      "path": "src/app/(dashboard)/leaderboard/page.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1773073552092,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}
