@@ -15,7 +15,7 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./init-clickhouse.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8123/ping"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

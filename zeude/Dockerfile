@@ -21,6 +21,10 @@ RUN VERSION=$(cat /tmp/version) && \
     GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o /releases/claude-darwin-arm64 ./cmd/claude && \
     GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o /releases/claude-linux-amd64 ./cmd/claude && \
     GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o /releases/claude-linux-arm64 ./cmd/claude && \
+    GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o /releases/codex-darwin-amd64 ./cmd/codex && \
+    GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o /releases/codex-darwin-arm64 ./cmd/codex && \
+    GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o /releases/codex-linux-amd64 ./cmd/codex && \
+    GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o /releases/codex-linux-arm64 ./cmd/codex && \
     GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o /releases/zeude-darwin-amd64 ./cmd/doctor && \
     GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o /releases/zeude-darwin-arm64 ./cmd/doctor && \
     GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /releases/zeude-linux-amd64 ./cmd/doctor && \

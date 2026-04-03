@@ -30,10 +30,27 @@ echo "Building claude shim..."
 for platform in "${PLATFORMS[@]}"; do
     GOOS="${platform%/*}"
     GOARCH="${platform#*/}"
-    OUTPUT_NAME="claude-${GOOS}-${GOARCH}"
+    EXT=""
+    [[ "$GOOS" == "windows" ]] && EXT=".exe"
+    OUTPUT_NAME="claude-${GOOS}-${GOARCH}${EXT}"
 
     echo -n "  $OUTPUT_NAME... "
-    GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT_NAME" ./cmd/claude
+    CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT_NAME" ./cmd/claude
+    echo -e "${GREEN}OK${NC}"
+done
+
+# Build codex shim
+echo ""
+echo "Building codex shim..."
+for platform in "${PLATFORMS[@]}"; do
+    GOOS="${platform%/*}"
+    GOARCH="${platform#*/}"
+    EXT=""
+    [[ "$GOOS" == "windows" ]] && EXT=".exe"
+    OUTPUT_NAME="codex-${GOOS}-${GOARCH}${EXT}"
+
+    echo -n "  $OUTPUT_NAME... "
+    CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT_NAME" ./cmd/codex
     echo -e "${GREEN}OK${NC}"
 done
 
@@ -43,10 +60,12 @@ echo "Building zeude doctor..."
 for platform in "${PLATFORMS[@]}"; do
     GOOS="${platform%/*}"
     GOARCH="${platform#*/}"
-    OUTPUT_NAME="zeude-${GOOS}-${GOARCH}"
+    EXT=""
+    [[ "$GOOS" == "windows" ]] && EXT=".exe"
+    OUTPUT_NAME="zeude-${GOOS}-${GOARCH}${EXT}"
 
     echo -n "  $OUTPUT_NAME... "
-    GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT_NAME" ./cmd/doctor
+    CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT_NAME" ./cmd/doctor
     echo -e "${GREEN}OK${NC}"
 done
 

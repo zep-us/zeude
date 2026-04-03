@@ -11,12 +11,78 @@ processors:
     timeout: 1s
     send_batch_size: 1000
 
+  # ── Codex Telemetry Normalization ──
+  # Maps Codex-native OTEL attribute keys to the unified Zeude schema so that
+  # downstream ClickHouse MVs (token_usage_hourly, etc.) can aggregate data
+  # from both Claude Code and Codex using the same column names.
+  #
+  # Condition: Only applies when service.name matches Codex sources:
+  #   - "codex"        : set by Zeude shim (OTEL_SERVICE_NAME env var)
+  #   - "codex_cli_rs" : Codex native originator default
+  # Claude Code data passes through untouched (conditions don't match).
+  #
+  # Key mappings (Codex native → Zeude unified):
+  #   input_token_count    → input_tokens
+  #   output_token_count   → output_tokens
+  #   cached_token_count   → cache_read_tokens
+  #   conversation.id      → session.id
+  #   user.account_id      → user.id  (fallback if zeude.user.id not injected)
+  #   zeude.user.id (res)  → user.id  (Supabase UUID, takes priority)
+  #   zeude.user.email(res) → user.email
+  transform/codex:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        conditions:
+          - resource.attributes["service.name"] == "codex" or resource.attributes["service.name"] == "codex_cli_rs" or resource.attributes["service.name"] == "codex_exec"
+        statements:
+          # ── Token count key normalization ──
+          - set(attributes["input_tokens"], attributes["input_token_count"]) where attributes["input_token_count"] != nil
+          - set(attributes["output_tokens"], attributes["output_token_count"]) where attributes["output_token_count"] != nil
+          - set(attributes["cache_read_tokens"], attributes["cached_token_count"]) where attributes["cached_token_count"] != nil
+
+          # Codex has no cache_creation_tokens — default to "0" for MV compatibility
+          - set(attributes["cache_creation_tokens"], "0") where attributes["cache_creation_tokens"] == nil
+
+          # Codex has no cost_usd — set to "0"; actual cost computed via pricing_model JOIN in MV
+          - set(attributes["cost_usd"], "0") where attributes["cost_usd"] == nil
+
+          # ── Session identity normalization ──
+          # Map Codex conversation.id to Zeude session.id
+          - set(attributes["session.id"], attributes["conversation.id"]) where attributes["conversation.id"] != nil and attributes["session.id"] == nil
+
+          # ── User identity injection ──
+          # Step 1: fallback to Codex-native user.account_id if no user.id exists
+          - set(attributes["user.id"], attributes["user.account_id"]) where attributes["user.account_id"] != nil and attributes["user.id"] == nil
+
+          # Step 2: override with zeude.user.id (Supabase UUID from shim) —
+          # ensures same developer using both Claude Code and Codex resolves
+          # to a single UUID across all dashboards and leaderboards
+          - set(attributes["user.id"], resource.attributes["zeude.user.id"]) where resource.attributes["zeude.user.id"] != nil and resource.attributes["zeude.user.id"] != ""
+          # Always prefer zeude email over Codex-native email (e.g. OpenAI account email)
+          - set(attributes["user.email"], resource.attributes["zeude.user.email"]) where resource.attributes["zeude.user.email"] != nil
+
+          # ── Team injection ──
+          # Inject zeude.team from resource attributes into log attributes
+          # (Codex has no native team field; Claude Code gets it via hook)
+          - set(attributes["team"], resource.attributes["zeude.team"]) where resource.attributes["zeude.team"] != nil
+
+          # ── Working directory / project path ──
+          # Injected by Zeude shim as resource attributes; map to log attributes
+          # so codex_prompts_bridge MV and dashboards can read them
+          - set(attributes["working_directory"], resource.attributes["zeude.working_directory"]) where resource.attributes["zeude.working_directory"] != nil
+          - set(attributes["project_path"], resource.attributes["zeude.project_path"]) where resource.attributes["zeude.project_path"] != nil
+
+          # ── Organization ID ──
+          # Codex has no org_id — ensure empty string for MV GROUP BY compatibility
+          - set(attributes["organization.id"], "") where attributes["organization.id"] == nil
+
 exporters:
   clickhouse:
     endpoint: ${CLICKHOUSE_ENDPOINT:-https://localhost:8443}
-    database: ${CLICKHOUSE_DATABASE:-zeude}
-    username: ${CLICKHOUSE_USERNAME:-default}
-    password: ${CLICKHOUSE_PASSWORD:-}
+    database: zeude
+    username: zep
+    password: ${CLICKHOUSE_PASSWORD}
     logs_table_name: claude_code_logs
     traces_table_name: claude_code_traces
     metrics_table_name: claude_code_metrics
@@ -36,9 +102,12 @@ service:
     logs:
       level: debug
   pipelines:
+    # Both Claude Code and Codex telemetry flow through the same pipeline.
+    # The transform/codex processor normalizes Codex keys; it's a no-op
+    # for Claude Code data (conditions don't match non-codex ServiceName).
     logs:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/codex, batch]
       exporters: [clickhouse, debug]
     metrics:
       receivers: [otlp]
