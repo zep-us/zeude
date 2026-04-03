@@ -5,6 +5,8 @@ package mcpconfig
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +14,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/zeude/zeude/internal/config"
@@ -34,8 +36,8 @@ const (
 	// Reduced from 48h to 5min since we now use hash-based comparison.
 	// TTL is now just a fallback - primary sync uses configVersion hash.
 	CacheTTL = 5 * time.Minute
-	// MaxResponseSize limits API response to prevent DoS (1MB).
-	MaxResponseSize = 1 << 20
+	// ManagedAgentsFile tracks which agent files are managed by Zeude.
+	ManagedAgentsFile = "managed-agents.json"
 )
 
 // debugLog controls whether debug logging is enabled.
@@ -110,9 +112,12 @@ func (e *AuthError) Error() string {
 }
 
 // MCPServer represents an MCP server configuration.
+// Supports both command-based (stdio) and URL-based (StreamableHTTP) servers.
 type MCPServer struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
+	Type    string            `json:"type,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 }
 
@@ -129,10 +134,18 @@ type Hook struct {
 
 // Skill represents a Claude Code slash command skill.
 type Skill struct {
-	Name        string `json:"name"`
-	Slug        string `json:"slug"`
-	Description string `json:"description,omitempty"`
-	Content     string `json:"content"`
+	Name        string            `json:"name"`
+	Slug        string            `json:"slug"`
+	Description string            `json:"description,omitempty"`
+	Content     string            `json:"content"`
+	Files       map[string]string `json:"files,omitempty"` // Multi-file support: {"SKILL.md": "content", ...}
+}
+
+// Agent represents a Claude Code agent profile.
+type Agent struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Files       map[string]string `json:"files"` // {"agent-name.md": "content"}
 }
 
 // ConfigHashes contains Merkle-tree style hashes for efficient sync.
@@ -141,6 +154,7 @@ type ConfigHashes struct {
 	MCPServers string `json:"mcpServers"`
 	Skills     string `json:"skills"`
 	Hooks      string `json:"hooks"`
+	Agents     string `json:"agents"`
 }
 
 // ConfigResponse is the response from the config API.
@@ -148,11 +162,13 @@ type ConfigResponse struct {
 	MCPServers    map[string]MCPServer `json:"mcpServers"`
 	Skills        []Skill              `json:"skills"`
 	Hooks         []Hook               `json:"hooks"`
+	Agents        []Agent              `json:"agents"`
 	Hashes        ConfigHashes         `json:"hashes"`        // Merkle-tree style hashes
 	ConfigVersion string               `json:"configVersion"` // Root hash (replaces timestamp)
 	ServerCount   int                  `json:"serverCount"`
 	SkillCount    int                  `json:"skillCount"`
 	HookCount     int                  `json:"hookCount"`
+	AgentCount    int                  `json:"agentCount"`
 	UserID        string               `json:"userId,omitempty"`    // Supabase UUID
 	UserEmail     string               `json:"userEmail,omitempty"`
 	Team          string               `json:"team,omitempty"`
@@ -176,6 +192,225 @@ type ManagedKeys struct {
 type ManagedHooks struct {
 	Hooks     []string  `json:"hooks"` // file paths
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// ManagedAgents tracks which agent files are managed by Zeude.
+type ManagedAgents struct {
+	Agents    []string  `json:"agents"` // file paths
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// UserInfoCache caches user identity for fast OTEL injection without network calls.
+// Stored at ~/.zeude/user-info.json.
+const UserInfoFile = "user-info.json"
+
+type UserInfoCache struct {
+	UserID       string    `json:"userId"`
+	UserEmail    string    `json:"userEmail"`
+	Team         string    `json:"team"`
+	AgentKeyHash string    `json:"agentKeyHash"` // SHA256 of agent key to detect key changes
+	CachedAt     time.Time `json:"cachedAt"`
+}
+
+// hashAgentKey returns a truncated SHA256 hash of the agent key.
+func hashAgentKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:16])
+}
+
+// loadUserInfo reads cached user info from ~/.zeude/user-info.json.
+func loadUserInfo() (*UserInfoCache, error) {
+	zeudePath, err := getZeudePath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(zeudePath, UserInfoFile))
+	if err != nil {
+		return nil, err
+	}
+	var info UserInfoCache
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// saveUserInfo writes user info cache to ~/.zeude/user-info.json.
+func saveUserInfo(result SyncResult, agentKey string) error {
+	if err := ensureZeudeDir(); err != nil {
+		return err
+	}
+	info := UserInfoCache{
+		UserID:       result.UserID,
+		UserEmail:    result.UserEmail,
+		Team:         result.Team,
+		AgentKeyHash: hashAgentKey(agentKey),
+		CachedAt:     time.Now(),
+	}
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	zeudePath, err := getZeudePath()
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(zeudePath, UserInfoFile), data, 0600)
+}
+
+// FastSync returns cached user info instantly without network calls.
+// Returns (result, needsBackgroundSync).
+// On first run or agent key change, falls back to full blocking Sync().
+// syncMode controls which resources are synced.
+type syncMode int
+
+const (
+	syncAll        syncMode = iota // Sync all resources (skills, hooks, agents, MCP)
+	syncSkillsOnly                 // Sync only skills (for Codex CLI shim)
+)
+
+// FastSync performs a fast sync using cached user info. Returns (result, needsBackgroundSync).
+func FastSync() (SyncResult, bool) {
+	return doFastSync(syncAll)
+}
+
+// FastSyncSkillsOnly is like FastSync but only syncs skills (no hooks, agents, or MCP).
+// Used by the Codex CLI shim to avoid writing Claude-specific config files.
+func FastSyncSkillsOnly() (SyncResult, bool) {
+	return doFastSync(syncSkillsOnly)
+}
+
+func doFastSync(mode syncMode) (SyncResult, bool) {
+	agentKey := getAgentKey()
+	if agentKey == "" {
+		logDebug("no agent key configured, skipping fast sync")
+		return SyncResult{NoAgentKey: true}, false
+	}
+
+	// Try to load cached user info
+	userInfo, err := loadUserInfo()
+	if err != nil {
+		logDebug("no user info cache, falling back to full sync: %v", err)
+		result := doSync(mode)
+		if result.Success {
+			if err := saveUserInfo(result, agentKey); err != nil {
+				logDebug("failed to save user info cache: %v", err)
+			}
+		}
+		return result, false
+	}
+
+	// Check if agent key has changed
+	if userInfo.AgentKeyHash != hashAgentKey(agentKey) {
+		logDebug("agent key changed, falling back to full sync")
+		result := doSync(mode)
+		if result.Success {
+			if err := saveUserInfo(result, agentKey); err != nil {
+				logDebug("failed to save user info cache: %v", err)
+			}
+		}
+		return result, false
+	}
+
+	// Cached user info available — return immediately
+	logDebug("using cached user info (cached at: %v)", userInfo.CachedAt)
+	return SyncResult{
+		UserID:    userInfo.UserID,
+		UserEmail: userInfo.UserEmail,
+		Team:      userInfo.Team,
+		Success:   true,
+		FromCache: true,
+	}, true // needs background sync
+}
+
+// BackgroundSync spawns a detached subprocess to run full sync.
+// The subprocess runs `<self> --background-sync` and is fully detached
+// from the parent process so it doesn't block Claude startup.
+func BackgroundSync() {
+	exe, err := os.Executable()
+	if err != nil {
+		logDebug("failed to get executable for background sync: %v", err)
+		return
+	}
+
+	cmd := exec.Command(exe, "--background-sync")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+	setSysProcAttrDetach(cmd) // platform-specific: detach from parent process group
+	if err := cmd.Start(); err != nil {
+		logDebug("failed to start background sync: %v", err)
+		return
+	}
+	logDebug("background sync started (pid: %d)", cmd.Process.Pid)
+}
+
+// RunBackgroundSync executes the full sync + autoupdate in background mode.
+// Called when the shim is invoked with --background-sync flag.
+// Saves updated user info to cache after successful sync.
+func RunBackgroundSync() {
+	doRunBackgroundSync(syncAll)
+}
+
+// RunBackgroundSyncSkillsOnly is like RunBackgroundSync but only syncs skills.
+func RunBackgroundSyncSkillsOnly() {
+	doRunBackgroundSync(syncSkillsOnly)
+}
+
+func doRunBackgroundSync(mode syncMode) {
+	agentKey := getAgentKey()
+	if agentKey == "" {
+		return
+	}
+	result := doSync(mode)
+	if result.Success {
+		if err := saveUserInfo(result, agentKey); err != nil {
+			logDebug("background sync: failed to save user info: %v", err)
+		}
+	}
+}
+
+// ManagedSkillEntry tracks a multi-file skill's installed files.
+type ManagedSkillEntry struct {
+	Path  string   `json:"path"`  // Base path (dir for multi-file, file for legacy)
+	Files []string `json:"files"` // All installed file paths
+}
+
+// ManagedSkillsV2 tracks managed skills with multi-file support.
+type ManagedSkillsV2 struct {
+	Skills    map[string]ManagedSkillEntry `json:"skills"` // slug -> entry
+	UpdatedAt time.Time                   `json:"updatedAt"`
+}
+
+// validateFilePath checks filename for path traversal attacks including symlink traversal.
+// Returns the full safe path or an error.
+func validateFilePath(filename string, baseDir string) (string, error) {
+	cleanPath := filepath.Clean(filename)
+	if strings.Contains(cleanPath, "..") || filepath.IsAbs(cleanPath) {
+		return "", fmt.Errorf("invalid file path: %s", filename)
+	}
+	fullPath := filepath.Join(baseDir, cleanPath)
+	if !strings.HasPrefix(fullPath, filepath.Clean(baseDir)+string(filepath.Separator)) && fullPath != filepath.Clean(baseDir) {
+		return "", fmt.Errorf("path traversal blocked: %s", fullPath)
+	}
+	// Defend against symlink-based directory escape:
+	// Resolve symlinks on the parent directory and verify it's still under baseDir.
+	parentDir := filepath.Dir(fullPath)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create parent dir: %w", err)
+	}
+	realParent, err := filepath.EvalSymlinks(parentDir)
+	if err != nil {
+		return "", fmt.Errorf("symlink eval failed for %s: %w", parentDir, err)
+	}
+	realBase, err := filepath.EvalSymlinks(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("symlink eval failed for base %s: %w", baseDir, err)
+	}
+	if !strings.HasPrefix(realParent, realBase+string(filepath.Separator)) && realParent != realBase {
+		return "", fmt.Errorf("symlink traversal blocked: %s resolves to %s (outside %s)", fullPath, realParent, realBase)
+	}
+	return fullPath, nil
 }
 
 // getHomeDir returns the user's home directory or error.
@@ -291,17 +526,20 @@ func fetchConfig(agentKey string, cachedVersion string) (*ConfigResponse, error)
 		}
 	}
 
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		logError("server database connection failed (503) - this is an infrastructure issue, not an auth problem")
+		return nil, fmt.Errorf("server infrastructure error: database connection failed")
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		logDebug("unexpected status code: %d", resp.StatusCode)
 		return nil, fmt.Errorf("config fetch failed: %d", resp.StatusCode)
 	}
 
-	// [FIX #7] Limit response size to prevent DoS
-	limitedReader := io.LimitReader(resp.Body, MaxResponseSize)
-	body, err := io.ReadAll(limitedReader)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logDebug("failed to read response body: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	var config ConfigResponse
@@ -348,6 +586,15 @@ func getManagedHooksPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(zeudePath, ManagedHooksFile), nil
+}
+
+// getManagedAgentsPath returns the path to the managed agents file.
+func getManagedAgentsPath() (string, error) {
+	zeudePath, err := getZeudePath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(zeudePath, ManagedAgentsFile), nil
 }
 
 // ensureZeudeDir creates ~/.zeude directory with proper permissions.
@@ -558,6 +805,14 @@ func clearCache() {
 	if err := os.Remove(managedHooksPath); err != nil && !os.IsNotExist(err) {
 		logError("failed to clear managed hooks: %v", err)
 	}
+
+	managedAgentsPath, err := getManagedAgentsPath()
+	if err != nil {
+		return
+	}
+	if err := os.Remove(managedAgentsPath); err != nil && !os.IsNotExist(err) {
+		logError("failed to clear managed agents: %v", err)
+	}
 }
 
 // loadManagedKeys loads the list of previously synced MCP keys.
@@ -761,17 +1016,26 @@ func mergeClaudeConfig(serverMCPs map[string]MCPServer) error {
 	oldManagedKeys := loadManagedKeys()
 	newManagedKeys := make([]string, 0, len(serverMCPs))
 
-	// Update or add server MCPs
+	// Update or add server MCPs to ~/.claude.json
 	for key, server := range serverMCPs {
-		mcpConfig := map[string]interface{}{
-			"command": server.Command,
-			"args":    server.Args,
-		}
-		if len(server.Env) > 0 {
-			mcpConfig["env"] = server.Env
+		newManagedKeys = append(newManagedKeys, key)
+		var mcpConfig map[string]interface{}
+		if server.URL != "" {
+			// URL-based servers require "type": "http" per Claude Code Streamable HTTP spec
+			mcpConfig = map[string]interface{}{
+				"type": "http",
+				"url":  server.URL,
+			}
+		} else {
+			mcpConfig = map[string]interface{}{
+				"command": server.Command,
+				"args":    server.Args,
+			}
+			if len(server.Env) > 0 {
+				mcpConfig["env"] = server.Env
+			}
 		}
 		existingMCPs[key] = mcpConfig
-		newManagedKeys = append(newManagedKeys, key)
 	}
 
 	// Remove servers that were previously managed but no longer exist
@@ -803,6 +1067,7 @@ func mergeClaudeConfig(serverMCPs map[string]MCPServer) error {
 	}
 
 	logDebug("merged %d servers into claude.json", len(serverMCPs))
+
 	return nil
 }
 
@@ -1184,114 +1449,496 @@ func registerHooksInSettings(installedHooks map[string][]string, deletedHooks []
 	return nil
 }
 
-// installSkills installs skills to ~/.claude/commands/ as markdown files.
-// Returns error if installation fails.
+// yamlQuoteValue wraps a string in YAML double quotes with proper escaping.
+// Prevents injection via newlines, quotes, or special YAML characters in skill metadata.
+func yamlQuoteValue(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	return `"` + s + `"`
+}
+
+// buildSkillFrontmatter constructs a YAML-frontmattered markdown document for a skill.
+func buildSkillFrontmatter(name, description, body string) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString(fmt.Sprintf("name: %s\n", yamlQuoteValue(name)))
+	if description != "" {
+		b.WriteString(fmt.Sprintf("description: %s\n", yamlQuoteValue(description)))
+	}
+	b.WriteString("---\n\n")
+	b.WriteString(body)
+	return b.String()
+}
+
+// extractBody strips YAML frontmatter (if present) and returns the markdown body.
+// If no frontmatter delimiters exist, returns the original content unchanged.
+func extractBody(content string) string {
+	if !strings.HasPrefix(content, "---\n") {
+		return content
+	}
+	rest := content[4:]
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return content
+	}
+	// Skip past "\n---" and any trailing newlines
+	body := rest[idx+4:]
+	body = strings.TrimLeft(body, "\n\r")
+	return body
+}
+
+// ensureSkillFrontmatter rebuilds YAML frontmatter from the canonical name and
+// description fields, preserving the markdown body.
+//
+// This guarantees Codex-compatible SKILL.md regardless of the input state:
+//   - Body-only content (migrated legacy skills) → frontmatter added
+//   - Broken YAML frontmatter (unescaped colons/quotes) → frontmatter replaced
+//   - Valid frontmatter → rebuilt identically (idempotent via yamlQuoteValue)
+//
+// The Zeude API always provides name and description as separate fields,
+// so rebuilding from those is safe and avoids parsing untrusted YAML.
+func ensureSkillFrontmatter(name, description, content string) string {
+	body := extractBody(content)
+	return buildSkillFrontmatter(name, description, body)
+}
+
+// codexSkillLengthWarnings logs non-blocking warnings if skill metadata exceeds
+// Codex loader limits (name: 64 chars, description: 1024 chars).
+func codexSkillLengthWarnings(logPrefix, slug, name, description string) {
+	if len([]rune(name)) > 64 {
+		logDebug("%sskill %s: name exceeds Codex 64-char limit (%d chars)", logPrefix, slug, len([]rune(name)))
+	}
+	if len([]rune(description)) > 1024 {
+		logDebug("%sskill %s: description exceeds Codex 1024-char limit (%d chars)", logPrefix, slug, len([]rune(description)))
+	}
+}
+
+// skillTarget defines where and how skills are written for a specific CLI tool.
+type skillTarget struct {
+	skillsDir   string // Directory for multi-file skills (e.g., ~/.claude/skills)
+	commandsDir string // Directory for legacy single-file skills (empty = convert to SKILL.md dir)
+	managedFile string // Path to managed_skills tracking JSON
+	logPrefix   string // Log prefix (e.g., "codex: ") for debug messages
+}
+
+// installSkills installs skills to Claude Code and Codex CLI paths.
 func installSkills(skills []Skill) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home dir: %w", err)
 	}
 
-	commandsDir := filepath.Join(homeDir, ".claude", "commands")
-
-	// Create commands directory if needed
-	if err := os.MkdirAll(commandsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create commands dir: %w", err)
+	// Install skills for Claude Code
+	if err := writeSkillsToTarget(skills, skillTarget{
+		skillsDir:   filepath.Join(homeDir, ".claude", "skills"),
+		commandsDir: filepath.Join(homeDir, ".claude", "commands"),
+		managedFile: filepath.Join(homeDir, ".zeude", "managed_skills.json"),
+	}); err != nil {
+		return err
 	}
 
-	// Load previously managed skills
-	managedSkillsFile := filepath.Join(homeDir, ".zeude", "managed_skills.json")
-	oldManagedSkills := loadManagedSkills(managedSkillsFile)
-	newManagedSkills := make([]string, 0, len(skills))
-
-	installedCount := 0
-
-	for _, skill := range skills {
-		// Skip if no slug or content
-		if skill.Slug == "" || skill.Content == "" {
-			logDebug("skipping skill with empty slug or content: %s", skill.Name)
-			continue
-		}
-
-		// Build skill file content with frontmatter
-		var content strings.Builder
-		content.WriteString("---\n")
-		content.WriteString(fmt.Sprintf("name: %s\n", skill.Name))
-		if skill.Description != "" {
-			content.WriteString(fmt.Sprintf("description: %s\n", skill.Description))
-		}
-		content.WriteString("---\n\n")
-		content.WriteString(skill.Content)
-
-		// Write skill file (only if content changed)
-		filename := sanitizeFilename(skill.Slug) + ".md"
-		skillPath := filepath.Join(commandsDir, filename)
-
-		written, err := writeFileIfChanged(skillPath, []byte(content.String()), 0644)
-		if err != nil {
-			logError("failed to write skill %s: %v", skillPath, err)
-			continue
-		}
-
-		newManagedSkills = append(newManagedSkills, skillPath)
-		if written {
-			installedCount++
-			logDebug("installed skill: %s -> %s", skill.Name, skillPath)
-		} else {
-			logDebug("skill unchanged: %s", skill.Name)
-		}
-	}
-
-	// Remove skills that were previously managed but no longer exist
-	deletedCount := 0
-	for _, oldSkill := range oldManagedSkills {
-		if !contains(newManagedSkills, oldSkill) {
-			if err := os.Remove(oldSkill); err != nil {
-				if !os.IsNotExist(err) {
-					logError("failed to remove deleted skill %s: %v", oldSkill, err)
-				}
-			} else {
-				logDebug("removed deleted skill: %s", oldSkill)
-				deletedCount++
-			}
-		}
-	}
-
-	// Save new managed skills list
-	if err := saveManagedSkills(managedSkillsFile, newManagedSkills); err != nil {
-		logError("failed to save managed skills: %v", err)
-	}
-
-	if installedCount > 0 || deletedCount > 0 {
-		logDebug("skills: %d installed, %d deleted", installedCount, deletedCount)
+	// Mirror skills for Codex CLI (best-effort, don't fail the whole sync)
+	if err := writeSkillsToTarget(skills, skillTarget{
+		skillsDir:   filepath.Join(homeDir, ".codex", "skills"),
+		managedFile: filepath.Join(homeDir, ".zeude", "managed_skills_codex.json"),
+		logPrefix:   "codex: ",
+	}); err != nil {
+		logError("failed to mirror skills to codex: %v", err)
 	}
 
 	return nil
 }
 
-// loadManagedSkills loads the list of managed skill paths.
-func loadManagedSkills(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
+// writeSkillsToTarget writes skills to a target directory with tracking and cleanup.
+// This is the shared core used by both Claude Code and Codex CLI skill sync.
+// When commandsDir is set, legacy single-file skills are written as {slug}.md there.
+// When commandsDir is empty, legacy skills are converted to SKILL.md directory format.
+func writeSkillsToTarget(skills []Skill, target skillTarget) error {
+	if err := os.MkdirAll(target.skillsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create skills dir: %w", err)
+	}
+	if target.commandsDir != "" {
+		if err := os.MkdirAll(target.commandsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create commands dir: %w", err)
+		}
 	}
 
-	var skills []string
-	if err := json.Unmarshal(data, &skills); err != nil {
-		return nil
+	oldManagedSkills := loadManagedSkillsV2(target.managedFile)
+	newManagedSkills := &ManagedSkillsV2{
+		Skills:    make(map[string]ManagedSkillEntry),
+		UpdatedAt: time.Now(),
 	}
 
-	return skills
+	installedCount := 0
+
+	for _, skill := range skills {
+		if skill.Slug == "" {
+			logDebug("%sskipping skill with empty slug: %s", target.logPrefix, skill.Name)
+			continue
+		}
+
+		sanitizedSlug := sanitizeFilename(skill.Slug)
+
+		if len(skill.Files) > 0 {
+			// Multi-file: write to {skillsDir}/{slug}/
+			skillDir := filepath.Join(target.skillsDir, sanitizedSlug)
+			if err := os.MkdirAll(skillDir, 0755); err != nil {
+				logError("%sfailed to create skill dir %s: %v", target.logPrefix, skillDir, err)
+				continue
+			}
+
+			entry := ManagedSkillEntry{
+				Path:  skillDir,
+				Files: make([]string, 0, len(skill.Files)),
+			}
+
+			coreFileWritten := false
+			skillChanged := false
+			for filename, fileContent := range skill.Files {
+				// For Codex targets (no commandsDir), ensure SKILL.md has valid YAML frontmatter.
+				// Migrated legacy skills may have body-only content in files["SKILL.md"]
+				// (from DB migration 20260305000001 wrapping content without frontmatter).
+				// Claude Code is unaffected — its multi-file path works fine without this.
+				if filepath.Base(filename) == "SKILL.md" && target.commandsDir == "" {
+					fileContent = ensureSkillFrontmatter(skill.Name, skill.Description, fileContent)
+				}
+
+				filePath, err := validateFilePath(filename, skillDir)
+				if err != nil {
+					logError("%spath validation failed for %s/%s: %v", target.logPrefix, skill.Slug, filename, err)
+					continue
+				}
+
+				fileDir := filepath.Dir(filePath)
+				if err := os.MkdirAll(fileDir, 0755); err != nil {
+					logError("%sfailed to create dir %s: %v", target.logPrefix, fileDir, err)
+					continue
+				}
+
+				written, err := writeFileIfChanged(filePath, []byte(fileContent), 0644)
+				if err != nil {
+					logError("%sfailed to write skill file %s: %v", target.logPrefix, filePath, err)
+					continue
+				}
+
+				if filename == "SKILL.md" {
+					coreFileWritten = true
+					if target.commandsDir == "" {
+						codexSkillLengthWarnings(target.logPrefix, skill.Slug, skill.Name, skill.Description)
+					}
+				}
+
+				entry.Files = append(entry.Files, filePath)
+				if written {
+					skillChanged = true
+					logDebug("%sinstalled skill file: %s/%s", target.logPrefix, skill.Slug, filename)
+				}
+			}
+			if skillChanged {
+				installedCount++
+			}
+
+			newManagedSkills.Skills[sanitizedSlug] = entry
+
+			// Clean up stale files from previous sync (e.g., renamed/deleted reference files)
+			if oldEntry, existed := oldManagedSkills.Skills[sanitizedSlug]; existed {
+				newFilesSet := make(map[string]bool, len(entry.Files))
+				for _, f := range entry.Files {
+					newFilesSet[f] = true
+				}
+				for _, oldFile := range oldEntry.Files {
+					if !newFilesSet[oldFile] {
+						if err := os.Remove(oldFile); err != nil && !os.IsNotExist(err) {
+							logError("%sfailed to remove stale skill file %s: %v", target.logPrefix, oldFile, err)
+						} else if err == nil {
+							logDebug("%sremoved stale skill file: %s", target.logPrefix, oldFile)
+							for dir := filepath.Dir(oldFile); dir != entry.Path; dir = filepath.Dir(dir) {
+								if err := os.Remove(dir); err != nil {
+									break // not empty or other error — stop climbing
+								}
+								logDebug("%sremoved empty directory: %s", target.logPrefix, dir)
+							}
+						}
+					}
+				}
+			}
+
+			// Clean up legacy single-file if commandsDir is set (migration from old format)
+			// Only clean up after confirming core file was written successfully
+			if target.commandsDir != "" && coreFileWritten {
+				legacyPath := filepath.Join(target.commandsDir, sanitizedSlug+".md")
+				if _, err := os.Stat(legacyPath); err == nil {
+					if err := os.Remove(legacyPath); err != nil {
+						logError("%sfailed to remove legacy skill %s: %v", target.logPrefix, legacyPath, err)
+					} else {
+						logDebug("%smigrated skill from legacy: %s", target.logPrefix, legacyPath)
+					}
+				}
+			}
+		} else if skill.Content != "" {
+			if target.commandsDir != "" {
+				// Legacy single-file mode: write to {commandsDir}/{slug}.md
+				content := buildSkillFrontmatter(skill.Name, skill.Description, skill.Content)
+
+				filename := sanitizedSlug + ".md"
+				skillPath := filepath.Join(target.commandsDir, filename)
+
+				written, err := writeFileIfChanged(skillPath, []byte(content), 0644)
+				if err != nil {
+					logError("%sfailed to write skill %s: %v", target.logPrefix, skillPath, err)
+					continue
+				}
+
+				newManagedSkills.Skills[sanitizedSlug] = ManagedSkillEntry{
+					Path:  skillPath,
+					Files: []string{skillPath},
+				}
+
+				if written {
+					installedCount++
+					logDebug("%sinstalled skill: %s -> %s", target.logPrefix, skill.Name, skillPath)
+				} else {
+					logDebug("%sskill unchanged: %s", target.logPrefix, skill.Name)
+				}
+			} else {
+				// No commandsDir: convert legacy to SKILL.md directory format (e.g., Codex CLI)
+				skillDir := filepath.Join(target.skillsDir, sanitizedSlug)
+				if err := os.MkdirAll(skillDir, 0755); err != nil {
+					logError("%sfailed to create skill dir %s: %v", target.logPrefix, skillDir, err)
+					continue
+				}
+
+				content := buildSkillFrontmatter(skill.Name, skill.Description, skill.Content)
+
+				skillPath := filepath.Join(skillDir, "SKILL.md")
+				written, err := writeFileIfChanged(skillPath, []byte(content), 0644)
+				if err != nil {
+					logError("%sfailed to write skill %s: %v", target.logPrefix, skillPath, err)
+					continue
+				}
+
+				newManagedSkills.Skills[sanitizedSlug] = ManagedSkillEntry{
+					Path:  skillDir,
+					Files: []string{skillPath},
+				}
+
+				if written {
+					installedCount++
+					logDebug("%sinstalled skill: %s (converted from legacy)", target.logPrefix, skill.Slug)
+				}
+			}
+		} else {
+			logDebug("%sskipping skill with no content or files: %s", target.logPrefix, skill.Name)
+		}
+	}
+
+	// Remove skills that were previously managed but no longer exist
+	deletedCount := 0
+	for slug, oldEntry := range oldManagedSkills.Skills {
+		if _, exists := newManagedSkills.Skills[slug]; !exists {
+			for _, filePath := range oldEntry.Files {
+				if err := os.Remove(filePath); err != nil {
+					if !os.IsNotExist(err) {
+						logError("%sfailed to remove deleted skill file %s: %v", target.logPrefix, filePath, err)
+					}
+				} else {
+					logDebug("%sremoved deleted skill file: %s", target.logPrefix, filePath)
+					deletedCount++
+				}
+			}
+			if oldEntry.Path != "" {
+				if info, err := os.Stat(oldEntry.Path); err == nil && info.IsDir() {
+					if strings.HasPrefix(oldEntry.Path, target.skillsDir+string(filepath.Separator)) {
+						if err := os.RemoveAll(oldEntry.Path); err != nil {
+							logError("%sfailed to remove skill dir %s: %v", target.logPrefix, oldEntry.Path, err)
+						}
+					} else {
+						logError("%srefusing to delete outside skills dir: %s", target.logPrefix, oldEntry.Path)
+					}
+				}
+			}
+		}
+	}
+
+	// Save new managed skills list
+	if err := saveManagedSkillsV2(target.managedFile, newManagedSkills); err != nil {
+		logError("%sfailed to save managed skills: %v", target.logPrefix, err)
+	}
+
+	if installedCount > 0 || deletedCount > 0 {
+		logDebug("%sskills: %d installed, %d deleted", target.logPrefix, installedCount, deletedCount)
+	}
+
+	return nil
 }
 
-// saveManagedSkills saves the list of managed skill paths.
-func saveManagedSkills(path string, skills []string) error {
-	data, err := json.Marshal(skills)
+// loadManagedSkillsV2 loads managed skills, supporting both v1 ([]string) and v2 formats.
+func loadManagedSkillsV2(path string) *ManagedSkillsV2 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return &ManagedSkillsV2{Skills: make(map[string]ManagedSkillEntry)}
+	}
+
+	// Try v2 format first
+	var v2 ManagedSkillsV2
+	if err := json.Unmarshal(data, &v2); err == nil && v2.Skills != nil {
+		return &v2
+	}
+
+	// Fallback: try legacy v1 format ([]string of file paths)
+	var v1 []string
+	if err := json.Unmarshal(data, &v1); err == nil {
+		result := &ManagedSkillsV2{Skills: make(map[string]ManagedSkillEntry)}
+		for _, filePath := range v1 {
+			// Extract slug from filename (e.g., "/path/to/my-skill.md" -> "my-skill")
+			base := filepath.Base(filePath)
+			slug := strings.TrimSuffix(base, filepath.Ext(base))
+			result.Skills[slug] = ManagedSkillEntry{
+				Path:  filePath,
+				Files: []string{filePath},
+			}
+		}
+		logDebug("migrated managed_skills.json from v1 to v2 format (%d skills)", len(v1))
+		return result
+	}
+
+	return &ManagedSkillsV2{Skills: make(map[string]ManagedSkillEntry)}
+}
+
+// saveManagedSkillsV2 saves managed skills in v2 format.
+func saveManagedSkillsV2(path string, skills *ManagedSkillsV2) error {
+	data, err := json.MarshalIndent(skills, "", "  ")
 	if err != nil {
 		return err
 	}
 
 	return writeFileAtomic(path, data, 0644)
+}
+
+// loadManagedAgents loads the list of previously synced agent file paths.
+func loadManagedAgents() []string {
+	managedPath, err := getManagedAgentsPath()
+	if err != nil {
+		return nil
+	}
+
+	data, err := os.ReadFile(managedPath)
+	if err != nil {
+		return nil
+	}
+
+	var managed ManagedAgents
+	if err := json.Unmarshal(data, &managed); err != nil {
+		return nil
+	}
+
+	return managed.Agents
+}
+
+// saveManagedAgents saves the list of currently synced agent file paths.
+func saveManagedAgents(agents []string) error {
+	if err := ensureZeudeDir(); err != nil {
+		return err
+	}
+
+	managed := ManagedAgents{
+		Agents:    agents,
+		UpdatedAt: time.Now(),
+	}
+
+	data, err := json.MarshalIndent(managed, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	managedPath, err := getManagedAgentsPath()
+	if err != nil {
+		return err
+	}
+
+	return writeFileAtomic(managedPath, data, 0600)
+}
+
+// installAgents installs agents to ~/.claude/agents/{name}.md.
+// Each agent has a files map but is installed as a single markdown file.
+// Returns error if installation fails.
+func installAgents(agents []Agent) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home dir: %w", err)
+	}
+
+	agentsDir := filepath.Join(homeDir, ".claude", "agents")
+
+	// Create agents directory if needed
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create agents dir: %w", err)
+	}
+
+	// Load previously managed agents
+	oldManagedAgents := loadManagedAgents()
+	newManagedAgents := make([]string, 0, len(agents))
+
+	installedCount := 0
+
+	for _, agent := range agents {
+		if agent.Name == "" || len(agent.Files) == 0 {
+			logDebug("skipping agent with empty name or files: %s", agent.Name)
+			continue
+		}
+
+		// Install each file in the agent's files map
+		for filename, content := range agent.Files {
+			filePath, err := validateFilePath(filename, agentsDir)
+			if err != nil {
+				logError("path validation failed for agent %s file %s: %v", agent.Name, filename, err)
+				continue
+			}
+
+			written, err := writeFileIfChanged(filePath, []byte(content), 0644)
+			if err != nil {
+				logError("failed to write agent %s: %v", filePath, err)
+				continue
+			}
+
+			newManagedAgents = append(newManagedAgents, filePath)
+			if written {
+				installedCount++
+				logDebug("installed agent: %s -> %s", agent.Name, filePath)
+			} else {
+				logDebug("agent unchanged: %s", agent.Name)
+			}
+		}
+	}
+
+	// Remove agents that were previously managed but no longer exist
+	deletedCount := 0
+	for _, oldAgent := range oldManagedAgents {
+		if !contains(newManagedAgents, oldAgent) {
+			if err := os.Remove(oldAgent); err != nil {
+				if !os.IsNotExist(err) {
+					logError("failed to remove deleted agent %s: %v", oldAgent, err)
+				}
+			} else {
+				logDebug("removed deleted agent: %s", oldAgent)
+				deletedCount++
+			}
+		}
+	}
+
+	// Save new managed agents list
+	if err := saveManagedAgents(newManagedAgents); err != nil {
+		logError("failed to save managed agents: %v", err)
+	}
+
+	if installedCount > 0 || deletedCount > 0 {
+		logDebug("agents: %d installed, %d deleted", installedCount, deletedCount)
+	}
+
+	return nil
 }
 
 // syncSkillRules fetches skill-rules.json from dashboard API and saves to ~/.claude/skill-rules.json.
@@ -1320,9 +1967,7 @@ func syncSkillRules(agentKey string) error {
 		return fmt.Errorf("skill-rules fetch failed: %d", resp.StatusCode)
 	}
 
-	// Limit response size
-	limitedReader := io.LimitReader(resp.Body, MaxResponseSize)
-	data, err := io.ReadAll(limitedReader)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
@@ -1369,6 +2014,7 @@ type SyncResult struct {
 	ServerCount int
 	SkillCount  int
 	HookCount   int
+	AgentCount  int
 	FromCache   bool
 	NoAgentKey  bool // True when agent key is not configured
 }
@@ -1379,7 +2025,18 @@ type SyncResult struct {
 // [FIX #1] Always call merge even with empty server list.
 // [FIX #8] Use errors.As for error type checking.
 // [FIX #14] Use WaitGroup to ensure goroutine completes before exit.
+// Sync performs a full sync of all resources (skills, hooks, agents, MCP servers).
 func Sync() SyncResult {
+	return doSync(syncAll)
+}
+
+// SyncSkillsOnly syncs only skills (no hooks, agents, or MCP servers).
+// Used by the Codex CLI shim to avoid writing Claude-specific config files.
+func SyncSkillsOnly() SyncResult {
+	return doSync(syncSkillsOnly)
+}
+
+func doSync(mode syncMode) SyncResult {
 	agentKey := getAgentKey()
 	if agentKey == "" {
 		logDebug("no agent key configured, skipping sync")
@@ -1461,30 +2118,35 @@ func Sync() SyncResult {
 		ServerCount: len(config.MCPServers),
 		SkillCount:  len(config.Skills),
 		HookCount:   len(config.Hooks),
+		AgentCount:  len(config.Agents),
 		FromCache:   fromCache,
 	}
 
-	// [FIX #1] ALWAYS call merge, even with empty server list
-	// This ensures deleted servers are properly cleaned up
-	if config.MCPServers == nil {
-		config.MCPServers = map[string]MCPServer{}
-	}
+	// MCP, hooks: only for full sync mode (Claude Code shim)
+	var installedHookIDs []string
+	if mode == syncAll {
+		// [FIX #1] ALWAYS call merge, even with empty server list
+		// This ensures deleted servers are properly cleaned up
+		if config.MCPServers == nil {
+			config.MCPServers = map[string]MCPServer{}
+		}
 
-	if err := mergeClaudeConfig(config.MCPServers); err != nil {
-		logError("merge failed: %v", err)
-		return result // Still return user info even if merge fails
-	}
+		if err := mergeClaudeConfig(config.MCPServers); err != nil {
+			logError("merge failed: %v", err)
+			return result // Still return user info even if merge fails
+		}
 
-	// Install hooks to ~/.claude/hooks/{event}/
-	// Always call installHooks even with empty hook list to clean up deleted hooks
-	if config.Hooks == nil {
-		config.Hooks = []Hook{}
-	}
-	dashboardURL := getDashboardURL()
-	installedHookIDs, err := installHooks(config.Hooks, agentKey, dashboardURL, config.UserEmail, config.Team)
-	if err != nil {
-		logError("hook install failed: %v", err)
-		// Non-fatal: continue with sync
+		// Install hooks to ~/.claude/hooks/{event}/
+		// Always call installHooks even with empty hook list to clean up deleted hooks
+		if config.Hooks == nil {
+			config.Hooks = []Hook{}
+		}
+		dashboardURL := getDashboardURL()
+		installedHookIDs, err = installHooks(config.Hooks, agentKey, dashboardURL, config.UserEmail, config.Team)
+		if err != nil {
+			logError("hook install failed: %v", err)
+			// Non-fatal: continue with sync
+		}
 	}
 
 	// Install skills to ~/.claude/commands/
@@ -1497,55 +2159,50 @@ func Sync() SyncResult {
 		// Non-fatal: continue with sync
 	}
 
-	// Sync skill-rules.json for Skill Hint hook
-	if err := syncSkillRules(agentKey); err != nil {
-		logDebug("skill-rules sync failed: %v", err)
-		// Non-fatal: hook will work without rules (just no hints)
-	}
-
-	logDebug("sync complete: %d servers, %d hooks, %d skills", len(config.MCPServers), len(config.Hooks), len(config.Skills))
-
-	// Report hook install status
-	if len(installedHookIDs) > 0 {
-		hookStatus := make([]HookInstallStatus, 0, len(installedHookIDs))
-		for _, hookID := range installedHookIDs {
-			hookStatus = append(hookStatus, HookInstallStatus{
-				HookID:    hookID,
-				Installed: true,
-			})
+	// Agents, skill-rules, and status reporting: only for full sync mode
+	if mode == syncAll {
+		// Install agents to ~/.claude/agents/
+		if config.Agents == nil {
+			config.Agents = []Agent{}
 		}
-		if err := ReportHookInstallStatus(agentKey, hookStatus); err != nil {
-			logDebug("failed to report hook install status: %v", err)
+		if err := installAgents(config.Agents); err != nil {
+			logError("agent install failed: %v", err)
 		}
-	}
 
-	// Check and report installation status
-	// [FIX #14] Use WaitGroup to ensure this completes before process exits
-	if len(config.MCPServers) > 0 {
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-			installStatus := CheckInstallStatus(config.MCPServers)
-			if err := ReportInstallStatus(agentKey, installStatus); err != nil {
-				logDebug("failed to report install status: %v", err)
-			}
-		}()
-
-		// Wait for status reporting to complete (with timeout)
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			logDebug("install status reporting completed")
-		case <-time.After(2 * time.Second):
-			logDebug("install status reporting timed out - proceeding")
+		// Sync skill-rules.json for Skill Hint hook
+		if err := syncSkillRules(agentKey); err != nil {
+			logDebug("skill-rules sync failed: %v", err)
 		}
+
+		logDebug("sync complete: %d servers, %d hooks, %d skills, %d agents", len(config.MCPServers), len(config.Hooks), len(config.Skills), len(config.Agents))
+
+		// Report hook install status (fire-and-forget)
+		if len(installedHookIDs) > 0 {
+			go func() {
+				hookStatus := make([]HookInstallStatus, 0, len(installedHookIDs))
+				for _, hookID := range installedHookIDs {
+					hookStatus = append(hookStatus, HookInstallStatus{
+						HookID:    hookID,
+						Installed: true,
+					})
+				}
+				if err := ReportHookInstallStatus(agentKey, hookStatus); err != nil {
+					logDebug("failed to report hook install status: %v", err)
+				}
+			}()
+		}
+
+		// Check and report installation status (fire-and-forget)
+		if len(config.MCPServers) > 0 {
+			go func() {
+				installStatus := CheckInstallStatus(config.MCPServers)
+				if err := ReportInstallStatus(agentKey, installStatus); err != nil {
+					logDebug("failed to report install status: %v", err)
+				}
+			}()
+		}
+	} else {
+		logDebug("sync complete (skills only): %d skills", len(config.Skills))
 	}
 
 	return result

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/zeude/zeude/internal/autoupdate"
@@ -110,12 +112,25 @@ func runDoctor() {
 	version := autoupdate.GetVersion()
 	fmt.Printf("%s[OK]%s Zeude version: %s\n", colorGreen, colorReset, version)
 
-	// Check shim
-	shimPath := filepath.Join(home, ".zeude", "bin", "claude")
+	// Check shims
+	shimName := "claude"
+	codexShimName := "codex"
+	if runtime.GOOS == "windows" {
+		shimName = "claude.exe"
+		codexShimName = "codex.exe"
+	}
+	shimPath := filepath.Join(home, ".zeude", "bin", shimName)
 	if _, err := os.Stat(shimPath); err == nil {
-		fmt.Printf("%s[OK]%s Shim installed: %s\n", colorGreen, colorReset, shimPath)
+		fmt.Printf("%s[OK]%s Claude shim installed: %s\n", colorGreen, colorReset, shimPath)
 	} else {
-		fmt.Printf("%s[FAIL]%s Shim not found at %s\n", colorRed, colorReset, shimPath)
+		fmt.Printf("%s[FAIL]%s Claude shim not found at %s\n", colorRed, colorReset, shimPath)
+	}
+
+	codexShimPath := filepath.Join(home, ".zeude", "bin", codexShimName)
+	if _, err := os.Stat(codexShimPath); err == nil {
+		fmt.Printf("%s[OK]%s Codex shim installed: %s\n", colorGreen, colorReset, codexShimPath)
+	} else {
+		fmt.Printf("%s[INFO]%s Codex shim not installed (optional): %s\n", colorGray, colorReset, codexShimPath)
 	}
 
 	// Check credentials
@@ -129,7 +144,7 @@ func runDoctor() {
 	// Check real claude
 	realPath := filepath.Join(home, ".zeude", "real_binary_path")
 	if data, err := os.ReadFile(realPath); err == nil {
-		path := string(data)
+		path := strings.TrimSpace(string(data))
 		if _, err := os.Stat(path); err == nil {
 			fmt.Printf("%s[OK]%s Real claude: %s\n", colorGreen, colorReset, path)
 		} else {
@@ -174,13 +189,18 @@ func runDoctor() {
 						continue
 					}
 					hookCount++
-					mode := info.Mode()
-					// Check if executable (user execute bit)
-					if mode&0100 == 0 {
-						fmt.Printf("%s[FAIL]%s %s/%s: not executable (chmod +x needed)\n", colorRed, colorReset, eventDir.Name(), hookFile.Name())
-						hookIssues++
-					} else {
+					// Windows has no Unix permission bits; skip executable check
+					if runtime.GOOS == "windows" {
 						fmt.Printf("%s[OK]%s %s/%s\n", colorGreen, colorReset, eventDir.Name(), hookFile.Name())
+					} else {
+						mode := info.Mode()
+						// Check if executable (user execute bit)
+						if mode&0100 == 0 {
+							fmt.Printf("%s[FAIL]%s %s/%s: not executable (chmod +x needed)\n", colorRed, colorReset, eventDir.Name(), hookFile.Name())
+							hookIssues++
+						} else {
+							fmt.Printf("%s[OK]%s %s/%s\n", colorGreen, colorReset, eventDir.Name(), hookFile.Name())
+						}
 					}
 				}
 			}

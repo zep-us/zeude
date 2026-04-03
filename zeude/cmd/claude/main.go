@@ -1,18 +1,21 @@
 // Package main provides the Zeude shim for claude CLI.
 // This minimal wrapper injects telemetry environment variables,
 // syncs MCP configuration, and executes the real claude binary.
+//
+// Performance: Uses FastSync (cached user info) for <100ms startup.
+// Full sync runs in a detached background process.
 package main
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
 
 	"github.com/zeude/zeude/internal/autoupdate"
 	"github.com/zeude/zeude/internal/config"
 	"github.com/zeude/zeude/internal/mcpconfig"
+	"github.com/zeude/zeude/internal/otelenv"
 	"github.com/zeude/zeude/internal/resolver"
 )
 
@@ -27,68 +30,45 @@ const (
 )
 
 func main() {
+	// Handle --background-sync mode (spawned by previous shim invocation)
+	if isBackgroundSyncMode() {
+		mcpconfig.RunBackgroundSync()
+		autoupdate.ForceCheckWithResult()
+		// Companion install: auto-install codex shim if codex is in PATH but shim is missing.
+		// Fail-open: errors are logged but never block the background sync.
+		installCompanionCodexShim()
+		os.Exit(0)
+	}
+
 	// Check if running interactively (show progress only in interactive mode)
 	interactive := isInteractive()
 
 	// Helper to print status
-	printStatus := func(msg string) {
-		if interactive {
-			fmt.Fprintf(os.Stderr, "%s[zeude]%s %s", colorBlue, colorReset, msg)
-		}
-	}
-	printOK := func() {
-		if interactive {
-			fmt.Fprintf(os.Stderr, " %s✓%s\n", colorGreen, colorReset)
-		}
-	}
 	printInfo := func(info string) {
 		if interactive {
-			fmt.Fprintf(os.Stderr, " %s%s%s\n", colorGray, info, colorReset)
+			fmt.Fprintf(os.Stderr, "%s[zeude]%s %s%s%s\n", colorBlue, colorReset, colorGray, info, colorReset)
 		}
 	}
 
-	// 1. Start parallel initialization (update check + config sync)
-	printStatus("Initializing...")
+	// 1. Fast sync: use cached user info (no network), or fall back to full sync on first run
+	syncResult, needsBackgroundSync := mcpconfig.FastSync()
 
-	var updateResult autoupdate.UpdateResult
-	var syncResult mcpconfig.SyncResult
-	var wg sync.WaitGroup
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		updateResult = autoupdate.CheckWithResult()
-	}()
-	go func() {
-		defer wg.Done()
-		syncResult = mcpconfig.Sync()
-	}()
-
-	// 2. Find real claude binary (while HTTP requests are in progress)
+	// 2. Find real claude binary
 	realClaude, err := resolver.FindRealBinary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "zeude: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 3. Wait for parallel tasks to complete
-	wg.Wait()
-
-	// 4. Display results
-	// Build status parts
+	// 3. Display status
 	var statusParts []string
 
-	// Update status
-	if updateResult.Updated {
-		statusParts = append(statusParts, fmt.Sprintf("%s↑%s%s", colorGreen, updateResult.NewVersion, colorGray))
-	} else if updateResult.NewVersionAvailable {
-		statusParts = append(statusParts, fmt.Sprintf("%supdate: %s%s", colorYellow, updateResult.NewVersion, colorGray))
-	}
-
-	// Sync status
 	if syncResult.NoAgentKey {
 		statusParts = append(statusParts, fmt.Sprintf("%sno agent key%s", colorYellow, colorGray))
 	} else if syncResult.Success {
+		if syncResult.FromCache {
+			statusParts = append(statusParts, "cached")
+		}
 		if syncResult.HookCount > 0 {
 			statusParts = append(statusParts, fmt.Sprintf("%d hooks", syncResult.HookCount))
 		}
@@ -98,34 +78,42 @@ func main() {
 		if syncResult.ServerCount > 0 {
 			statusParts = append(statusParts, fmt.Sprintf("%d servers", syncResult.ServerCount))
 		}
-		if syncResult.FromCache {
-			statusParts = append(statusParts, "cached")
-		}
 	} else if !syncResult.NoAgentKey {
 		statusParts = append(statusParts, fmt.Sprintf("%ssync failed%s", colorRed, colorGray))
 	}
 
-	// Print combined status
 	if len(statusParts) > 0 {
 		printInfo(strings.Join(statusParts, ", "))
-	} else {
-		printOK()
 	}
 
-	// 5. Show welcome message
+	// 4. Show welcome message
 	if interactive {
 		showStartupBanner(syncResult)
 	}
 
-	// 6. Inject telemetry environment variables (only if not already set)
+	// 5. Inject telemetry environment variables (only if not already set)
 	injectTelemetryEnv(syncResult)
 
+	// 6. Spawn background sync BEFORE exec (it detaches from parent)
+	if needsBackgroundSync {
+		mcpconfig.BackgroundSync()
+	}
+
 	// 7. Exec real claude (replaces this process - no PTY needed!)
-	err = syscall.Exec(realClaude, os.Args, os.Environ())
-	if err != nil {
+	if err := execBinary(realClaude, os.Args, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "zeude: failed to exec claude: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// isBackgroundSyncMode checks if we're invoked as a background sync subprocess.
+func isBackgroundSyncMode() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "--background-sync" {
+			return true
+		}
+	}
+	return false
 }
 
 // isInteractive checks if we're running in an interactive terminal
@@ -185,54 +173,101 @@ func showStartupBanner(syncResult mcpconfig.SyncResult) {
 // who don't have email in their native telemetry.
 func injectTelemetryEnv(syncResult mcpconfig.SyncResult) {
 	// Enable Claude Code telemetry
-	setEnvIfEmpty("CLAUDE_CODE_ENABLE_TELEMETRY", "1")
+	otelenv.SetEnvIfEmpty("CLAUDE_CODE_ENABLE_TELEMETRY", "1")
 
 	// Configure OTel exporter endpoint (using shared config package)
 	endpoint := config.GetCollectorEndpoint(config.DefaultCollectorEndpoint)
-	setEnvIfEmpty("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+	otelenv.SetEnvIfEmpty("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
 
 	// Configure OTel protocol and exporters
 	// Use http/protobuf instead of grpc for better compatibility
-	setEnvIfEmpty("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-	setEnvIfEmpty("OTEL_METRICS_EXPORTER", "otlp")
-	setEnvIfEmpty("OTEL_LOGS_EXPORTER", "otlp")
-	setEnvIfEmpty("OTEL_TRACES_EXPORTER", "otlp")
+	otelenv.SetEnvIfEmpty("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+	otelenv.SetEnvIfEmpty("OTEL_METRICS_EXPORTER", "otlp")
+	otelenv.SetEnvIfEmpty("OTEL_LOGS_EXPORTER", "otlp")
+	otelenv.SetEnvIfEmpty("OTEL_TRACES_EXPORTER", "otlp")
 
 	// Inject Zeude user info as OTEL resource attributes
 	// This helps identify Bedrock users who don't have email in native telemetry
 	// and allows matching ClickHouse data with Supabase users
 	if syncResult.UserID != "" {
-		injectResourceAttribute("zeude.user.id", syncResult.UserID)
+		otelenv.InjectResourceAttribute("zeude.user.id", syncResult.UserID)
 	}
 	if syncResult.UserEmail != "" {
-		injectResourceAttribute("zeude.user.email", syncResult.UserEmail)
+		otelenv.InjectResourceAttribute("zeude.user.email", syncResult.UserEmail)
 	}
 	if syncResult.Team != "" {
-		injectResourceAttribute("zeude.team", syncResult.Team)
+		otelenv.InjectResourceAttribute("zeude.team", syncResult.Team)
 	}
 }
 
-// injectResourceAttribute adds a key-value pair to OTEL_RESOURCE_ATTRIBUTES.
-// Appends to existing attributes if present, otherwise creates new.
-func injectResourceAttribute(key, value string) {
-	// Escape special characters in value (commas and equals signs)
-	escapedValue := strings.ReplaceAll(value, "=", "%3D")
-	escapedValue = strings.ReplaceAll(escapedValue, ",", "%2C")
+// installCompanionCodexShim auto-installs the codex shim if codex is in PATH
+// but no shim exists at ~/.zeude/bin/codex. Called during background sync.
+// Also repairs corrupted codex shims (caused by a bug where the Claude-specific
+// autoupdate in the codex background sync overwrote the codex binary with claude).
+// Fail-open: errors are logged but never block Claude's operation.
+func installCompanionCodexShim() {
+	// Check if real codex exists in PATH (not our shim)
+	if _, err := resolver.FindRealBinaryByName("codex"); err != nil {
+		return // Codex not installed, nothing to do
+	}
 
-	attr := key + "=" + escapedValue
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
 
-	existing := os.Getenv("OTEL_RESOURCE_ATTRIBUTES")
-	if existing == "" {
-		os.Setenv("OTEL_RESOURCE_ATTRIBUTES", attr)
-	} else {
-		os.Setenv("OTEL_RESOURCE_ATTRIBUTES", existing+","+attr)
+	shimPath := filepath.Join(home, ".zeude", "bin", "codex")
+	needsInstall := false
+
+	if _, err := os.Stat(shimPath); os.IsNotExist(err) {
+		// Codex shim missing — needs install
+		needsInstall = true
+	} else if isCorruptedCodexShim(home) {
+		// Codex shim exists but is corrupted (identical to claude binary)
+		needsInstall = true
+		fmt.Fprintf(os.Stderr, "[zeude:background] codex shim corrupted, repairing...\n")
+	}
+
+	if !needsInstall {
+		return
+	}
+
+	if err := autoupdate.InstallCompanionBinary("codex"); err != nil {
+		fmt.Fprintf(os.Stderr, "[zeude:background] codex companion install failed: %v\n", err)
+		return
+	}
+
+	// Store real codex path for the resolver
+	if realCodex, err := resolver.FindRealBinaryByName("codex"); err == nil {
+		storedPath := filepath.Join(home, ".zeude", "real_codex_path")
+		os.WriteFile(storedPath, []byte(realCodex), 0600)
 	}
 }
 
-// setEnvIfEmpty sets an environment variable only if it's not already set.
-// This allows users to override Zeude defaults.
-func setEnvIfEmpty(key, value string) {
-	if os.Getenv(key) == "" {
-		os.Setenv(key, value)
+// isCorruptedCodexShim detects whether ~/.zeude/bin/codex has been overwritten
+// with the claude binary. This happened due to a bug where the codex shim's
+// background sync called the Claude-specific autoupdate function, which
+// downloaded the claude binary and wrote it to the codex path.
+// Detection: if codex and claude binaries have identical file sizes, the codex
+// shim is almost certainly corrupted (they are built from different Go packages).
+//
+// TEMPORARY: This function exists to repair installations corrupted by the bug
+// fixed in cmd/codex/main.go (ForceCheckWithResult → ForceCheckBinaryWithResult).
+// Once all users have updated (estimate: 2 weeks after deploy), this function
+// and the corruption check in installCompanionCodexShim can be removed,
+// reverting to the original "if file exists, skip" logic.
+func isCorruptedCodexShim(home string) bool {
+	claudePath := filepath.Join(home, ".zeude", "bin", "claude")
+	codexPath := filepath.Join(home, ".zeude", "bin", "codex")
+
+	claudeInfo, err := os.Stat(claudePath)
+	if err != nil {
+		return false
 	}
+	codexInfo, err := os.Stat(codexPath)
+	if err != nil {
+		return false
+	}
+
+	return claudeInfo.Size() == codexInfo.Size()
 }

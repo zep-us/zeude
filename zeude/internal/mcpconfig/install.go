@@ -40,6 +40,13 @@ func CheckInstallStatus(servers map[string]MCPServer) []InstallStatus {
 			Installed:  false,
 		}
 
+		// URL-based servers don't need local installation
+		if server.URL != "" {
+			status.Installed = true
+			results = append(results, status)
+			continue
+		}
+
 		// Determine package type based on command
 		switch server.Command {
 		case "npx":

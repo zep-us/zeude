@@ -1,4 +1,9 @@
-// Package autoupdate handles self-updating of the zeude shim binary.
+// Package autoupdate handles self-updating of zeude shim binaries.
+// Supports updating any named binary (claude, codex, etc.) and companion
+// installation of additional shims during background sync.
+//
+// Design: N=2 optimized (Claude + Codex), but generic enough for N>2.
+// TODO: If a third shim is added, consider a manifest-driven updater.
 package autoupdate
 
 import (
@@ -20,19 +25,65 @@ const (
 	checkInterval       = 24 * time.Hour
 	forceUpdateInterval = 12 * time.Hour // Force update if not updated in 12 hours
 	updateTimeout       = 30 * time.Second
-	defaultUpdateURL    = "https://your-dashboard-url/releases"
+	defaultUpdateURL    = "https://cc.zep.works/releases"
 )
+
+// For testing: allow overriding the update URL and HOME directory.
+var (
+	updateURL = defaultUpdateURL
+	homeDir   = "" // empty means use os.UserHomeDir()
+)
+
+// getHomeDir returns the home directory, using the override if set.
+func getHomeDir() string {
+	if homeDir != "" {
+		return homeDir
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return os.Getenv("HOME")
+	}
+	return h
+}
+
+// configDir returns ~/.zeude
+func configDir() string {
+	return filepath.Join(getHomeDir(), ".zeude")
+}
+
+// --- Per-binary state file helpers ---
+
+// stateFilePath returns the path for a per-binary state file.
+// For Claude, it also handles backward compatibility with unsuffixed legacy files.
+func stateFilePath(baseName, binaryName string) string {
+	suffixed := filepath.Join(configDir(), baseName+"_"+binaryName)
+	if binaryName == "claude" {
+		// Backward compat: if suffixed doesn't exist but unsuffixed does, migrate
+		unsuffixed := filepath.Join(configDir(), baseName)
+		if _, err := os.Stat(suffixed); os.IsNotExist(err) {
+			if _, err := os.Stat(unsuffixed); err == nil {
+				// Migrate: copy unsuffixed → suffixed
+				if data, err := os.ReadFile(unsuffixed); err == nil {
+					os.WriteFile(suffixed, data, 0600)
+				}
+				return suffixed
+			}
+		}
+	}
+	return suffixed
+}
+
+// --- Public API: Claude-specific (backward compatible) ---
 
 // RequiresUpdate checks if an update is required (more than forceUpdateInterval since last successful update).
 // Returns true if update is required, false otherwise.
-// This is used to enforce periodic updates.
+// This reads the unsuffixed last_successful_update file for hook SQL compatibility.
 func RequiresUpdate() bool {
 	if Version == "dev" {
 		return false
 	}
 
-	configDir := filepath.Join(os.Getenv("HOME"), ".zeude")
-	lastSuccessFile := filepath.Join(configDir, "last_successful_update")
+	lastSuccessFile := filepath.Join(configDir(), "last_successful_update")
 
 	info, err := os.Stat(lastSuccessFile)
 	if err != nil {
@@ -45,10 +96,10 @@ func RequiresUpdate() bool {
 	return time.Since(info.ModTime()) > forceUpdateInterval
 }
 
-// TimeSinceLastUpdate returns how long since the last successful update
+// TimeSinceLastUpdate returns how long since the last successful update.
+// Reads the unsuffixed file for hook SQL compatibility.
 func TimeSinceLastUpdate() time.Duration {
-	configDir := filepath.Join(os.Getenv("HOME"), ".zeude")
-	lastSuccessFile := filepath.Join(configDir, "last_successful_update")
+	lastSuccessFile := filepath.Join(configDir(), "last_successful_update")
 
 	info, err := os.Stat(lastSuccessFile)
 	if err != nil {
@@ -58,34 +109,24 @@ func TimeSinceLastUpdate() time.Duration {
 	return time.Since(info.ModTime())
 }
 
-// MarkUpdateSuccess marks the current time as last successful update
+// MarkUpdateSuccess marks the current time as last successful update.
+// Dual-writes: unsuffixed (for hook SQL at 20260106000001) AND _claude suffixed.
 func MarkUpdateSuccess() {
-	configDir := filepath.Join(os.Getenv("HOME"), ".zeude")
-	lastSuccessFile := filepath.Join(configDir, "last_successful_update")
-	touchFile(lastSuccessFile)
+	dir := configDir()
+	touchFile(filepath.Join(dir, "last_successful_update"))
+	touchFile(filepath.Join(dir, "last_successful_update_claude"))
 }
 
-// touchFile creates or updates the modification time of a file
-func touchFile(path string) {
-	// Ensure directory exists
-	os.MkdirAll(filepath.Dir(path), 0755)
-	f, err := os.Create(path)
-	if err == nil {
-		f.Close()
+// markBinaryUpdateSuccess marks update success for a specific binary.
+// For Claude: dual-writes (unsuffixed + suffixed) for hook SQL compatibility.
+// For Codex: writes only the suffixed file.
+func markBinaryUpdateSuccess(binaryName string) {
+	dir := configDir()
+	touchFile(filepath.Join(dir, "last_successful_update_"+binaryName))
+	if binaryName == "claude" {
+		// Also touch unsuffixed for hook SQL backward compatibility
+		touchFile(filepath.Join(dir, "last_successful_update"))
 	}
-}
-
-// writeCurrentVersion writes the current version to ~/.zeude/current_version
-// This allows the update checker hook to compare versions
-func writeCurrentVersion() {
-	configDir := filepath.Join(os.Getenv("HOME"), ".zeude")
-	versionFile := filepath.Join(configDir, "current_version")
-
-	// Ensure directory exists
-	os.MkdirAll(configDir, 0755)
-
-	// Write version
-	os.WriteFile(versionFile, []byte(Version), 0644)
 }
 
 // UpdateResult contains the result of an update check.
@@ -104,16 +145,36 @@ func Check() {
 	CheckWithResult()
 }
 
-// CheckWithResult checks for updates and returns detailed result.
-// Always checks on startup (no skip). This is fail-open: any error is returned but execution continues.
+// CheckWithResult checks for Claude updates and returns detailed result.
+// Includes re-exec on successful update (Claude-specific behavior).
+// Skips check if already checked within checkInterval (24h).
 func CheckWithResult() UpdateResult {
+	return checkWithResultClaude(false)
+}
+
+// ForceCheckWithResult always checks for Claude updates regardless of checkInterval.
+// Use this in background sync to ensure updates are picked up promptly.
+func ForceCheckWithResult() UpdateResult {
+	return checkWithResultClaude(true)
+}
+
+// checkWithResultClaude is the Claude-specific update flow with re-exec.
+// This preserves the exact existing behavior for the Claude shim.
+func checkWithResultClaude(force bool) UpdateResult {
 	result := UpdateResult{}
 
 	// Always write current version for hook to read
 	writeCurrentVersion()
 
 	if Version == "dev" {
-		// Skip update check for development builds
+		result.Skipped = true
+		return result
+	}
+
+	lastCheckFile := stateFilePath("last_update_check", "claude")
+
+	// Skip if checked recently (within 24h), unless forced
+	if !force && shouldSkip(lastCheckFile) {
 		result.Skipped = true
 		return result
 	}
@@ -124,6 +185,9 @@ func CheckWithResult() UpdateResult {
 		result.Error = err
 		return result
 	}
+
+	// Mark that we checked (regardless of result)
+	updateLastCheckTime(lastCheckFile)
 
 	result.NewVersion = remoteVersion
 
@@ -136,7 +200,7 @@ func CheckWithResult() UpdateResult {
 
 	result.NewVersionAvailable = true
 
-	// Perform update
+	// Perform update (Claude-specific: resolves symlinks internally)
 	if err := performUpdate(); err != nil {
 		result.Error = err
 		return result
@@ -146,12 +210,11 @@ func CheckWithResult() UpdateResult {
 	MarkUpdateSuccess()
 	result.Updated = true
 
-	// Re-exec with new binary immediately
+	// Re-exec with new binary immediately (Claude-specific)
 	execPath, err := os.Executable()
 	if err == nil {
 		execPath, _ = filepath.EvalSymlinks(execPath)
 		fmt.Fprintf(os.Stderr, "\n")
-		// Replace current process with new binary
 		syscall.Exec(execPath, os.Args, os.Environ())
 		// If exec fails, continue with old binary
 	}
@@ -159,99 +222,137 @@ func CheckWithResult() UpdateResult {
 	return result
 }
 
-// shouldSkip returns true if we checked recently (within checkInterval)
-func shouldSkip(lastCheckFile string) bool {
-	info, err := os.Stat(lastCheckFile)
+// --- Public API: Generic binary update ---
+
+// CheckBinaryWithResult checks for updates for any named binary.
+// Unlike CheckWithResult, it does NOT re-exec — the caller handles re-exec.
+// Uses per-binary state files to avoid cross-binary suppression.
+func CheckBinaryWithResult(binaryName string) UpdateResult {
+	return checkBinaryWithResult(binaryName, false)
+}
+
+// ForceCheckBinaryWithResult always checks for updates regardless of checkInterval.
+func ForceCheckBinaryWithResult(binaryName string) UpdateResult {
+	return checkBinaryWithResult(binaryName, true)
+}
+
+func checkBinaryWithResult(binaryName string, force bool) UpdateResult {
+	result := UpdateResult{}
+
+	// Write current version for hook to read
+	writeCurrentVersion()
+
+	if Version == "dev" {
+		result.Skipped = true
+		return result
+	}
+
+	lastCheckFile := stateFilePath("last_update_check", binaryName)
+
+	if !force && shouldSkip(lastCheckFile) {
+		result.Skipped = true
+		return result
+	}
+
+	remoteVersion, err := fetchRemoteVersion()
 	if err != nil {
-		return false // File doesn't exist, should check
+		result.Error = err
+		return result
 	}
-	return time.Since(info.ModTime()) < checkInterval
-}
 
-// updateLastCheckTime updates the last check timestamp file
-func updateLastCheckTime(lastCheckFile string) {
-	// Touch the file
-	f, err := os.Create(lastCheckFile)
-	if err == nil {
-		f.Close()
+	updateLastCheckTime(lastCheckFile)
+
+	result.NewVersion = remoteVersion
+
+	if !isNewer(remoteVersion, Version) {
+		markBinaryUpdateSuccess(binaryName)
+		return result
 	}
-}
 
-// fetchRemoteVersion fetches the latest version from the server
-func fetchRemoteVersion() (string, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(defaultUpdateURL + "/version.txt")
+	result.NewVersionAvailable = true
+
+	// Get current executable path (caller decides symlink resolution policy)
+	execPath, err := os.Executable()
 	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("server returned %d", resp.StatusCode)
+		result.Error = fmt.Errorf("failed to get executable path: %w", err)
+		return result
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	if err := performUpdateForBinary(binaryName, execPath); err != nil {
+		result.Error = err
+		return result
 	}
 
-	return strings.TrimSpace(string(body)), nil
+	markBinaryUpdateSuccess(binaryName)
+	result.Updated = true
+
+	// NOTE: No re-exec here. Caller (each shim's main) handles re-exec
+	// because each shim has different symlink resolution and exec logic.
+
+	return result
 }
 
-// isNewer returns true if remote version is newer than local
-func isNewer(remote, local string) bool {
-	// Strip 'v' prefix if present
-	remote = strings.TrimPrefix(remote, "v")
-	local = strings.TrimPrefix(local, "v")
-
-	// Simple string comparison for semver (works for x.y.z format)
-	remoteParts := strings.Split(remote, ".")
-	localParts := strings.Split(local, ".")
-
-	for i := 0; i < len(remoteParts) && i < len(localParts); i++ {
-		if remoteParts[i] > localParts[i] {
-			return true
-		}
-		if remoteParts[i] < localParts[i] {
-			return false
-		}
+// InstallCompanionBinary downloads and installs a companion shim binary.
+// Used by Claude's background sync to auto-install the Codex shim when
+// Codex is detected in PATH but no shim exists at ~/.zeude/bin/{name}.
+//
+// Unlike self-update, this:
+//   - Downloads to a fixed path (~/.zeude/bin/{name}), not os.Executable()
+//   - Does NOT re-exec (companion binary is not the running process)
+//   - Is fail-open: errors are returned but should never block the caller
+func InstallCompanionBinary(binaryName string) error {
+	if strings.ContainsAny(binaryName, "/\\") || binaryName == ".." || binaryName == "." || binaryName == "" {
+		return fmt.Errorf("invalid binary name: %q", binaryName)
 	}
-
-	return len(remoteParts) > len(localParts)
+	targetPath := filepath.Join(getHomeDir(), ".zeude", "bin", binaryName)
+	return performUpdateForBinary(binaryName, targetPath)
 }
 
-// performUpdate downloads and replaces the current binary
+// --- Internal implementation ---
+
+// performUpdate downloads and replaces the Claude binary (legacy, symlink-resolving).
+// Kept for backward compatibility with checkWithResultClaude.
 func performUpdate() error {
-	// Determine platform
-	platform := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
-	binaryURL := fmt.Sprintf("%s/claude-%s", defaultUpdateURL, platform)
-
-	// Get current executable path
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Resolve symlinks
+	// Claude-specific: resolve symlinks
 	execPath, err = filepath.EvalSymlinks(execPath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve symlinks: %w", err)
 	}
 
-	// Download new binary to temp file
+	return performUpdateForBinary("claude", execPath)
+}
+
+// performUpdateForBinary downloads and atomically replaces a named binary.
+// binaryName determines the download URL ({updateURL}/{binaryName}-{platform}).
+// targetPath is the local filesystem path to write the binary to.
+func performUpdateForBinary(binaryName, targetPath string) error {
+	platform := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
+	binaryURL := fmt.Sprintf("%s/%s-%s", updateURL, binaryName, platform)
+
+	// Ensure target directory exists (for companion installs where dir may not exist)
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		return fmt.Errorf("failed to create target directory: %w", err)
+	}
+
+	// Download new binary
 	client := &http.Client{Timeout: updateTimeout}
 	resp, err := client.Get(binaryURL)
 	if err != nil {
-		return fmt.Errorf("failed to download: %w", err)
+		return fmt.Errorf("failed to download %s: %w", binaryName, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+		return fmt.Errorf("download %s failed with status %d", binaryName, resp.StatusCode)
 	}
 
 	// Create temp file in same directory (for atomic rename)
-	tmpFile, err := os.CreateTemp(filepath.Dir(execPath), "claude-update-*")
+	tmpFile, err := os.CreateTemp(filepath.Dir(targetPath), binaryName+"-update-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -269,33 +370,106 @@ func performUpdate() error {
 	_, err = io.Copy(tmpFile, resp.Body)
 	tmpFile.Close()
 	if err != nil {
-		return fmt.Errorf("failed to write update: %w", err)
+		return fmt.Errorf("failed to write update for %s: %w", binaryName, err)
 	}
 
 	// Make executable
 	if err := os.Chmod(tmpPath, 0755); err != nil {
-		return fmt.Errorf("failed to chmod: %w", err)
+		return fmt.Errorf("failed to chmod %s: %w", binaryName, err)
 	}
 
-	// Backup current binary
-	backupPath := execPath + ".old"
-	os.Remove(backupPath) // Remove old backup if exists
-	if err := os.Rename(execPath, backupPath); err != nil {
-		return fmt.Errorf("failed to backup current binary: %w", err)
+	// Backup current binary (if it exists)
+	backupPath := targetPath + ".old"
+	os.Remove(backupPath)
+	if _, err := os.Stat(targetPath); err == nil {
+		if err := os.Rename(targetPath, backupPath); err != nil {
+			return fmt.Errorf("failed to backup current %s binary: %w", binaryName, err)
+		}
 	}
 
 	// Move new binary into place
-	if err := os.Rename(tmpPath, execPath); err != nil {
+	if err := os.Rename(tmpPath, targetPath); err != nil {
 		// Try to restore backup
-		os.Rename(backupPath, execPath)
-		return fmt.Errorf("failed to install update: %w", err)
+		os.Rename(backupPath, targetPath)
+		return fmt.Errorf("failed to install %s update: %w", binaryName, err)
 	}
 
-	// Clean up backup (on success, old binary is no longer needed)
+	// Clean up backup
 	os.Remove(backupPath)
 
 	success = true
 	return nil
+}
+
+// --- Shared helpers ---
+
+func touchFile(path string) {
+	os.MkdirAll(filepath.Dir(path), 0755)
+	f, err := os.Create(path)
+	if err == nil {
+		f.Close()
+	}
+}
+
+// writeCurrentVersion writes the current version to ~/.zeude/current_version
+// This allows the update checker hook to compare versions.
+func writeCurrentVersion() {
+	dir := configDir()
+	os.MkdirAll(dir, 0755)
+	os.WriteFile(filepath.Join(dir, "current_version"), []byte(Version), 0600)
+}
+
+func shouldSkip(lastCheckFile string) bool {
+	info, err := os.Stat(lastCheckFile)
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) < checkInterval
+}
+
+func updateLastCheckTime(lastCheckFile string) {
+	touchFile(lastCheckFile)
+}
+
+func fetchRemoteVersion() (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(updateURL + "/version.txt")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(body)), nil
+}
+
+// isNewer returns true if remote version is newer than local.
+// Uses string comparison per component — works for YYYYMMDD.HHMM format.
+func isNewer(remote, local string) bool {
+	remote = strings.TrimPrefix(remote, "v")
+	local = strings.TrimPrefix(local, "v")
+
+	remoteParts := strings.Split(remote, ".")
+	localParts := strings.Split(local, ".")
+
+	for i := 0; i < len(remoteParts) && i < len(localParts); i++ {
+		if remoteParts[i] > localParts[i] {
+			return true
+		}
+		if remoteParts[i] < localParts[i] {
+			return false
+		}
+	}
+
+	return len(remoteParts) > len(localParts)
 }
 
 // GetVersion returns the current version
