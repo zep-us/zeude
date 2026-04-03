@@ -25,7 +25,7 @@ const (
 	checkInterval       = 24 * time.Hour
 	forceUpdateInterval = 12 * time.Hour // Force update if not updated in 12 hours
 	updateTimeout       = 30 * time.Second
-	defaultUpdateURL    = "https://cc.zep.works/releases"
+	defaultUpdateURL    = "https://your-dashboard-url/releases"
 )
 
 // For testing: allow overriding the update URL and HOME directory.

@@ -4,8 +4,8 @@ import type { NextRequest } from 'next/server'
 // Allowed origins for CORS
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
-  'https://cc.zep.works',
-]
+  process.env.NEXT_PUBLIC_APP_URL || '',
+].filter(Boolean)
 
 // Check if origin is allowed
 function isAllowedOrigin(origin: string | null): boolean {

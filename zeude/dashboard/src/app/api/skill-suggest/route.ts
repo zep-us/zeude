@@ -183,7 +183,7 @@ Return JSON: {"matches": [{"skill": "name", "confidence": 0.85}]}`
         headers: {
           'Authorization': `Bearer ${openRouterKey}`,
           'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://zeude.zep.us',
+          'HTTP-Referer': 'https://localhost:3000',
         },
         body: JSON.stringify(llmPayload),
         signal: controller.signal,

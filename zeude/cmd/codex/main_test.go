@@ -141,7 +141,7 @@ func TestInjectTelemetryEnv_CodexServiceName(t *testing.T) {
 
 	sr := identity.UserIdentity{
 		UserID:    "550e8400-e29b-41d4-a716-446655440000",
-		UserEmail: "developer@zep.us",
+		UserEmail: "developer@example.com",
 		Team:      "engineering",
 	}
 
@@ -161,7 +161,7 @@ func TestInjectTelemetryEnv_UserIdentity(t *testing.T) {
 	cleanOtelEnv(t)
 
 	userID := "550e8400-e29b-41d4-a716-446655440000"
-	userEmail := "developer@zep.us"
+	userEmail := "developer@example.com"
 	team := "engineering"
 
 	sr := identity.UserIdentity{
@@ -197,7 +197,7 @@ func TestInjectTelemetryEnv_NoOrgID(t *testing.T) {
 
 	sr := identity.UserIdentity{
 		UserID:    "550e8400-e29b-41d4-a716-446655440000",
-		UserEmail: "developer@zep.us",
+		UserEmail: "developer@example.com",
 	}
 
 	injectTelemetryEnv(sr)
@@ -320,7 +320,7 @@ func TestIsInteractive_NonInteractiveFlags(t *testing.T) {
 // --- Tests for injectCodexOtelConfig / updateCodexConfig ---
 
 func TestUpdateCodexConfig_EmptyContent(t *testing.T) {
-	result := updateCodexConfig("", "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig("", "https://otel.example.com/v1/logs")
 
 	if !strings.Contains(result, "[otel]") {
 		t.Error("missing [otel] section")
@@ -331,7 +331,7 @@ func TestUpdateCodexConfig_EmptyContent(t *testing.T) {
 	if !strings.Contains(result, "[otel.exporter.otlp-http]") {
 		t.Error("missing [otel.exporter.otlp-http] section")
 	}
-	if !strings.Contains(result, `endpoint = "https://otel2.zep.us/v1/logs"`) {
+	if !strings.Contains(result, `endpoint = "https://otel.example.com/v1/logs"`) {
 		t.Errorf("missing endpoint, got:\n%s", result)
 	}
 }
@@ -340,12 +340,12 @@ func TestUpdateCodexConfig_ReplacesEndpoint(t *testing.T) {
 	input := "[otel]\nlog_user_prompt = true\n\n[otel.exporter.otlp-http]\n" +
 		`endpoint = "https://old.example.com/v1/logs"` + "\n"
 
-	result := updateCodexConfig(input, "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig(input, "https://otel.example.com/v1/logs")
 
 	if strings.Contains(result, "old.example.com") {
 		t.Errorf("old endpoint should be replaced, got:\n%s", result)
 	}
-	if !strings.Contains(result, `endpoint = "https://otel2.zep.us/v1/logs"`) {
+	if !strings.Contains(result, `endpoint = "https://otel.example.com/v1/logs"`) {
 		t.Errorf("new endpoint missing, got:\n%s", result)
 	}
 }
@@ -353,7 +353,7 @@ func TestUpdateCodexConfig_ReplacesEndpoint(t *testing.T) {
 func TestUpdateCodexConfig_PreservesOtherContent(t *testing.T) {
 	input := "[model]\ndefault = \"gpt-4\"\n\n[history]\nmax_entries = 100\n"
 
-	result := updateCodexConfig(input, "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig(input, "https://otel.example.com/v1/logs")
 
 	if !strings.Contains(result, `default = "gpt-4"`) {
 		t.Error("existing [model] content should be preserved")
@@ -371,9 +371,9 @@ func TestUpdateCodexConfig_PreservesOtherContent(t *testing.T) {
 
 func TestUpdateCodexConfig_AddsLogUserPrompt(t *testing.T) {
 	input := "[otel]\n\n[otel.exporter.otlp-http]\n" +
-		`endpoint = "https://otel2.zep.us/v1/logs"` + "\n"
+		`endpoint = "https://otel.example.com/v1/logs"` + "\n"
 
-	result := updateCodexConfig(input, "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig(input, "https://otel.example.com/v1/logs")
 
 	if !strings.Contains(result, "log_user_prompt = true") {
 		t.Errorf("should add log_user_prompt, got:\n%s", result)
@@ -382,9 +382,9 @@ func TestUpdateCodexConfig_AddsLogUserPrompt(t *testing.T) {
 
 func TestUpdateCodexConfig_NoChangeWhenCorrect(t *testing.T) {
 	input := "[otel]\nlog_user_prompt = true\n\n[otel.exporter.otlp-http]\n" +
-		`endpoint = "https://otel2.zep.us/v1/logs"` + "\n"
+		`endpoint = "https://otel.example.com/v1/logs"` + "\n"
 
-	result := updateCodexConfig(input, "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig(input, "https://otel.example.com/v1/logs")
 
 	if result != input {
 		t.Errorf("should not change correct config.\nGot:\n%q\nWant:\n%q", result, input)
@@ -394,9 +394,9 @@ func TestUpdateCodexConfig_NoChangeWhenCorrect(t *testing.T) {
 func TestUpdateCodexConfig_AddsEndpointToExistingSection(t *testing.T) {
 	input := "[otel]\nlog_user_prompt = true\n\n[otel.exporter.otlp-http]\n"
 
-	result := updateCodexConfig(input, "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig(input, "https://otel.example.com/v1/logs")
 
-	if !strings.Contains(result, `endpoint = "https://otel2.zep.us/v1/logs"`) {
+	if !strings.Contains(result, `endpoint = "https://otel.example.com/v1/logs"`) {
 		t.Errorf("should add endpoint to existing section, got:\n%s", result)
 	}
 }
@@ -404,10 +404,10 @@ func TestUpdateCodexConfig_AddsEndpointToExistingSection(t *testing.T) {
 func TestUpdateCodexConfig_DoesNotCorruptSimilarKeys(t *testing.T) {
 	input := "[otel]\nlog_user_prompt = true\nlog_user_prompt_extra = \"debug\"\n\n" +
 		"[otel.exporter.otlp-http]\n" +
-		`endpoint = "https://otel2.zep.us/v1/logs"` + "\n" +
+		`endpoint = "https://otel.example.com/v1/logs"` + "\n" +
 		"endpoint_timeout = 30\n"
 
-	result := updateCodexConfig(input, "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig(input, "https://otel.example.com/v1/logs")
 
 	if !strings.Contains(result, "endpoint_timeout = 30") {
 		t.Errorf("endpoint_timeout should be preserved, got:\n%s", result)
@@ -422,12 +422,12 @@ func TestUpdateCodexConfig_ReversedSectionOrder(t *testing.T) {
 		`endpoint = "https://old.example.com/v1/logs"` + "\n\n" +
 		"[otel]\nlog_user_prompt = false\n"
 
-	result := updateCodexConfig(input, "https://otel2.zep.us/v1/logs")
+	result := updateCodexConfig(input, "https://otel.example.com/v1/logs")
 
 	if strings.Contains(result, "old.example.com") {
 		t.Errorf("old endpoint should be replaced, got:\n%s", result)
 	}
-	if !strings.Contains(result, `endpoint = "https://otel2.zep.us/v1/logs"`) {
+	if !strings.Contains(result, `endpoint = "https://otel.example.com/v1/logs"`) {
 		t.Errorf("new endpoint missing, got:\n%s", result)
 	}
 	if !strings.Contains(result, "log_user_prompt = true") {
@@ -439,7 +439,7 @@ func TestInjectCodexOtelConfig_CreatesFile(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	injectCodexOtelConfig("https://otel2.zep.us/")
+	injectCodexOtelConfig("https://otel.example.com/")
 
 	configPath := filepath.Join(tmpHome, ".codex", "config.toml")
 	data, err := os.ReadFile(configPath)
@@ -448,7 +448,7 @@ func TestInjectCodexOtelConfig_CreatesFile(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, `endpoint = "https://otel2.zep.us/v1/logs"`) {
+	if !strings.Contains(content, `endpoint = "https://otel.example.com/v1/logs"`) {
 		t.Errorf("endpoint not set correctly, got:\n%s", content)
 	}
 	if !strings.Contains(content, "log_user_prompt = true") {
@@ -467,7 +467,7 @@ func TestInjectCodexOtelConfig_UpdatesExisting(t *testing.T) {
 		`endpoint = "https://old.example.com/v1/logs"` + "\n"
 	os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte(existing), 0644)
 
-	injectCodexOtelConfig("https://otel2.zep.us/")
+	injectCodexOtelConfig("https://otel.example.com/")
 
 	data, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
 	if err != nil {
@@ -478,7 +478,7 @@ func TestInjectCodexOtelConfig_UpdatesExisting(t *testing.T) {
 	if strings.Contains(content, "old.example.com") {
 		t.Errorf("old endpoint should be replaced, got:\n%s", content)
 	}
-	if !strings.Contains(content, `endpoint = "https://otel2.zep.us/v1/logs"`) {
+	if !strings.Contains(content, `endpoint = "https://otel.example.com/v1/logs"`) {
 		t.Errorf("new endpoint missing, got:\n%s", content)
 	}
 }
@@ -493,13 +493,13 @@ func TestInjectCodexOtelConfig_SkipsWhenUnchanged(t *testing.T) {
 
 	// Write config that already has the correct endpoint
 	correct := "[otel]\nlog_user_prompt = true\n\n[otel.exporter.otlp-http]\n" +
-		`endpoint = "https://otel2.zep.us/v1/logs"` + "\n"
+		`endpoint = "https://otel.example.com/v1/logs"` + "\n"
 	os.WriteFile(configPath, []byte(correct), 0644)
 
 	// Record modification time
 	infoBefore, _ := os.Stat(configPath)
 
-	injectCodexOtelConfig("https://otel2.zep.us/")
+	injectCodexOtelConfig("https://otel.example.com/")
 
 	// File should not be rewritten
 	infoAfter, _ := os.Stat(configPath)

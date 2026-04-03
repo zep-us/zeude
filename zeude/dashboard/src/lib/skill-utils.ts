@@ -94,7 +94,7 @@ Generate keywords and hint for this skill.`
       headers: {
         'Authorization': `Bearer ${openRouterKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://zeude.zep.us',
+        'HTTP-Referer': 'https://localhost:3000',
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
