@@ -4,12 +4,15 @@ Zeude is an enterprise monitoring and configuration management platform for Clau
 
 ## Features
 
-- **OpenTelemetry Integration**: Collect and analyze Claude Code usage metrics
+- **OpenTelemetry Integration**: Collect and analyze Claude Code and Codex usage metrics
 - **Prompt Analytics**: Track and analyze all prompts sent to Claude Code
+- **Multi-Agent Support**: Monitor both Claude Code and OpenAI Codex from a single dashboard
+- **Skill Distribution**: Multi-file skill management with folder structure support
+- **Agent Profiles**: Centrally manage Claude Code agent configurations
 - **MCP Server Management**: Centrally manage MCP servers across your team
 - **Remote Hook Deployment**: Deploy Claude Code hooks from the dashboard
 - **Auto-Update**: CLI binary automatically updates when new versions are available
-- **Team Management**: Organize users into teams with shared configurations
+- **Team Management**: Organize users into teams with cohort-based grouping
 
 ## Quick Install
 
@@ -81,13 +84,14 @@ Replace `zd_xxx` with your agent key from the dashboard.
 
 ### Sync Process
 
-When you run `claude`, the shim:
+When you run `claude` (or `codex`), the shim:
 
 1. Calls the dashboard API to fetch your team's configuration
 2. Syncs MCP servers to `~/.claude.json`
 3. Installs hooks to `~/.claude/hooks/{event}/`
-4. Registers hooks in `~/.claude/settings.json`
-5. Executes the real Claude CLI
+4. Syncs skills to `~/.claude/skills/` (Claude) or `~/.codex/skills/` (Codex)
+5. Registers hooks in `~/.claude/settings.json`
+6. Executes the real CLI binary
 
 ## Configuration
 
@@ -121,6 +125,19 @@ Add, edit, and remove MCP servers from the dashboard. Servers are automatically 
 - Global servers: Available to all users
 - Team servers: Available only to specific teams
 
+### Skill Management
+
+Distribute skills to your team from the dashboard:
+
+- Multi-file skills with folder structure support
+- Keyword-based skill suggestion via hooks
+- Per-user skill enable/disable preferences
+- Contributor tracking
+
+### Agent Profiles
+
+Centrally manage agent configurations (CLAUDE.md templates) and distribute them to team members.
+
 ### Hook Management
 
 Deploy Claude Code hooks remotely:
@@ -135,6 +152,14 @@ Hooks support Bash, Python, and Node.js scripts.
 ### Prompt Analytics
 
 The built-in Prompt Logger hook captures all prompts and stores them in ClickHouse for analysis. Use the AI chatbot to query your prompt history.
+
+### Codex Integration
+
+Monitor OpenAI Codex usage alongside Claude Code:
+
+- Unified telemetry via OTel Collector transform
+- Source-based filtering in dashboards (Claude vs Codex)
+- Shared leaderboard and cost tracking across both tools
 
 ## Commands
 
