@@ -1,6 +1,6 @@
 -- ================================================
 -- Zeude ClickHouse Schema - Final DDL
--- Generated from migrations 001-009
+-- Generated from migrations 001-015 (includes Codex integration, source column, pricing JOIN, SSOT user_id fix)
 -- ================================================
 
 -- ================================================
@@ -42,7 +42,9 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- ================================================
 -- 1. AI Prompts Table
--- Stores all user prompts from Claude Code for analytics
+-- Stores all user prompts from Claude Code and Codex for analytics
+-- Claude Code data inserted via prompt-logger hook (source='claude')
+-- Codex data inserted via codex_prompts_bridge MV (source='codex')
 -- ================================================
 CREATE TABLE IF NOT EXISTS ai_prompts (
     prompt_id UUID DEFAULT generateUUIDv4(),
@@ -59,6 +61,9 @@ CREATE TABLE IF NOT EXISTS ai_prompts (
     prompt_type LowCardinality(String) DEFAULT 'natural',  -- 'natural', 'skill', 'command', 'agent'
     invoked_name String DEFAULT '',
 
+    -- Source identification (claude | codex)
+    source LowCardinality(String) DEFAULT 'claude',
+
     -- Context
     project_path String,
     working_directory String,
@@ -68,7 +73,8 @@ CREATE TABLE IF NOT EXISTS ai_prompts (
     INDEX idx_user_email_time (user_email, timestamp) TYPE minmax GRANULARITY 1,
     INDEX idx_team (team) TYPE bloom_filter GRANULARITY 1,
     INDEX idx_prompt_text (prompt_text) TYPE tokenbf_v1(10240, 3, 0) GRANULARITY 1,
-    INDEX idx_prompt_type (prompt_type) TYPE bloom_filter GRANULARITY 1
+    INDEX idx_prompt_type (prompt_type) TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_source (source) TYPE bloom_filter GRANULARITY 1
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
@@ -98,21 +104,45 @@ INSERT INTO pricing_model VALUES
     ('claude-3-5-haiku-20241022', '2024-10-22', 0.80, 4.00, 0.08, 1.00),
     ('claude-3-opus-20240229', '2024-02-29', 15.00, 75.00, 1.50, 18.75),
     ('claude-opus-4-20250514', '2025-05-14', 15.00, 75.00, 1.50, 18.75),
-    ('claude-opus-4-5-20251101', '2025-11-01', 15.00, 75.00, 1.50, 18.75);
+    ('claude-opus-4-5-20251101', '2025-11-01', 15.00, 75.00, 1.50, 18.75),
+    ('o3', '2025-04-16', 2.00, 8.00, 0.50, 0.00),
+    ('gpt-4.1', '2025-04-14', 2.00, 8.00, 0.50, 0.00),
+    ('gpt-4.1-mini', '2025-04-14', 0.40, 1.60, 0.10, 0.00),
+    ('gpt-5.4', '2026-03-05', 2.50, 15.00, 0.25, 0.00),
+    ('gpt-5.4-2026-03-05', '2026-03-05', 2.50, 15.00, 0.25, 0.00),
+    ('gpt-5.4-pro', '2026-03-05', 30.00, 180.00, 3.00, 0.00),
+    ('gpt-5.4-pro-2026-03-05', '2026-03-05', 30.00, 180.00, 3.00, 0.00),
+    ('gpt-5.3-codex', '2025-12-11', 1.75, 14.00, 0.175, 0.00),
+    ('gpt-5.3-codex-spark', '2025-12-11', 1.75, 14.00, 0.175, 0.00),
+    ('gpt-5.3-chat-latest', '2025-12-11', 1.75, 14.00, 0.175, 0.00);
 
 
 -- ================================================
 -- 3. Token Usage Hourly (Materialized View)
 -- Aggregates token usage from claude_code_logs
+-- Uses canonical Supabase UUID (zeude.user.id) as user_id
+-- to unify metrics across Claude Code and Codex
+-- source column derived from ServiceName for tool-level filtering
+-- cost_usd computed via pricing_model JOIN (not from LogAttributes)
+--   Formula: sum of (token_count × price_per_million / 1,000,000)
+--   for input, output, cache_read, and cache_creation token types.
+--   OpenAI models have cache_creation_price = 0, so effectively
+--   only 3 types (input, output, cache_read) contribute to Codex cost.
 -- ================================================
 CREATE MATERIALIZED VIEW IF NOT EXISTS token_usage_hourly
 ENGINE = SummingMergeTree()
-ORDER BY (org_id, user_id, model_id, mcp_server, hour)
+ORDER BY (org_id, user_id, source, model_id, mcp_server, hour)
 TTL toDateTime(hour) + INTERVAL 90 DAY DELETE
 SETTINGS index_granularity = 8192
 AS SELECT
     LogAttributes['organization.id'] as org_id,
-    LogAttributes['user.id'] as user_id,
+    if(ResourceAttributes['zeude.user.id'] != '',
+       ResourceAttributes['zeude.user.id'],
+       LogAttributes['user.id']) as user_id,
+    multiIf(
+        ServiceName ILIKE 'codex%', 'codex',
+        'claude'
+    ) as source,
     anyIf(LogAttributes['user.email'], LogAttributes['user.email'] != '') as user_email,
     LogAttributes['model'] as model_id,
     LogAttributes['mcp.server'] as mcp_server,
@@ -121,21 +151,45 @@ AS SELECT
     sum(toInt64OrZero(LogAttributes['output_tokens'])) as output_tokens,
     sum(toInt64OrZero(LogAttributes['cache_read_tokens'])) as cache_read_tokens,
     sum(toInt64OrZero(LogAttributes['cache_creation_tokens'])) as cache_creation_tokens,
-    sum(toFloat64OrZero(LogAttributes['cost_usd'])) as cost_usd,
+    sum(
+        if(pm.model_id IS NOT NULL,
+            toInt64OrZero(LogAttributes['input_tokens'])
+                * pm.input_price / 1000000.0
+            + toInt64OrZero(LogAttributes['output_tokens'])
+                * pm.output_price / 1000000.0
+            + toInt64OrZero(LogAttributes['cache_read_tokens'])
+                * pm.cache_read_price / 1000000.0
+            + toInt64OrZero(LogAttributes['cache_creation_tokens'])
+                * pm.cache_creation_price / 1000000.0,
+            toFloat64OrZero(LogAttributes['cost_usd'])
+        )
+    ) as cost_usd,
     count() as request_count,
     sum(toInt64OrZero(LogAttributes['duration_ms'])) as total_duration_ms
 FROM claude_code_logs
+LEFT JOIN (
+    SELECT
+        model_id,
+        argMax(input_price_per_million, effective_date) as input_price,
+        argMax(output_price_per_million, effective_date) as output_price,
+        argMax(cache_read_price_per_million, effective_date) as cache_read_price,
+        argMax(cache_creation_price_per_million, effective_date) as cache_creation_price
+    FROM pricing_model
+    GROUP BY model_id
+) pm ON LogAttributes['model'] = pm.model_id
 WHERE toInt64OrZero(LogAttributes['input_tokens']) > 0 OR toInt64OrZero(LogAttributes['output_tokens']) > 0
-GROUP BY org_id, user_id, model_id, mcp_server, hour;
+GROUP BY org_id, user_id, source, model_id, mcp_server, hour;
 
 
 -- ================================================
 -- 4. Efficiency Metrics Daily (View)
 -- Cache hit rate, average input per request
+-- Includes source column for Claude Code vs Codex filtering
 -- ================================================
 CREATE VIEW IF NOT EXISTS efficiency_metrics_daily AS
 SELECT
     user_id,
+    source,
     toDate(hour) as date,
 
     sum(input_tokens) as total_input,
@@ -165,7 +219,7 @@ SELECT
     ) as avg_duration_ms
 
 FROM token_usage_hourly
-GROUP BY user_id, date;
+GROUP BY user_id, source, date;
 
 
 -- ================================================
@@ -174,6 +228,7 @@ GROUP BY user_id, date;
 -- ================================================
 CREATE VIEW IF NOT EXISTS retry_analysis AS
 SELECT
+    multiIf(ServiceName ILIKE 'codex%', 'codex', 'claude') as source,
     user_id,
     session_id,
     toDate(timestamp) as date,
@@ -194,7 +249,10 @@ SELECT
 
 FROM (
     SELECT
-        LogAttributes['user.id'] as user_id,
+        ServiceName,
+        if(ResourceAttributes['zeude.user.id'] != '',
+           ResourceAttributes['zeude.user.id'],
+           LogAttributes['user.id']) as user_id,
         LogAttributes['session.id'] as session_id,
         Timestamp as timestamp,
         toInt64OrZero(LogAttributes['duration_ms']) as duration_ms,
@@ -212,7 +270,7 @@ FROM (
     WINDOW w AS (PARTITION BY LogAttributes['session.id'] ORDER BY Timestamp)
 )
 WHERE user_id != ''
-GROUP BY user_id, session_id, date;
+GROUP BY source, user_id, session_id, date;
 
 
 -- ================================================
@@ -221,6 +279,7 @@ GROUP BY user_id, session_id, date;
 -- ================================================
 CREATE VIEW IF NOT EXISTS context_growth_analysis AS
 SELECT
+    multiIf(ServiceName ILIKE 'codex%', 'codex', 'claude') as source,
     user_id,
     session_id,
     toDate(min(timestamp)) as date,
@@ -239,7 +298,10 @@ SELECT
 
 FROM (
     SELECT
-        LogAttributes['user.id'] as user_id,
+        ServiceName,
+        if(ResourceAttributes['zeude.user.id'] != '',
+           ResourceAttributes['zeude.user.id'],
+           LogAttributes['user.id']) as user_id,
         LogAttributes['session.id'] as session_id,
         Timestamp as timestamp,
         toInt64OrZero(LogAttributes['input_tokens']) as input_tokens,
@@ -249,16 +311,55 @@ FROM (
        OR toInt64OrZero(LogAttributes['output_tokens']) > 0
 )
 WHERE user_id != ''
-GROUP BY user_id, session_id;
+GROUP BY source, user_id, session_id;
 
 
 -- ================================================
--- 7. Frustration Analysis (View)
--- Detects user frustration via keyword patterns
+-- 7. Codex Prompts Bridge (Materialized View)
+-- Routes codex.user_prompt events from OTEL logs into ai_prompts
+-- so frustration_analysis and other prompt analytics process Codex data.
+-- Uses same ai_prompts table as Claude Code for uniform analysis.
+-- ================================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS codex_prompts_bridge
+TO ai_prompts
+AS SELECT
+    generateUUIDv4() as prompt_id,
+    LogAttributes['conversation.id'] as session_id,
+    if(ResourceAttributes['zeude.user.id'] != '',
+       ResourceAttributes['zeude.user.id'],
+       LogAttributes['user.account_id']) as user_id,
+    LogAttributes['user.email'] as user_email,
+    LogAttributes['team'] as team,
+    Timestamp as timestamp,
+    LogAttributes['prompt'] as prompt_text,
+    toUInt32OrZero(LogAttributes['prompt_length']) as prompt_length,
+
+    -- Skill detection from Codex $skill-name syntax
+    -- First char lowercase filters env vars ($PATH, $HOME, etc.)
+    if(length(extract(LogAttributes['prompt'], '\\$([a-z][a-zA-Z0-9_:-]*)')) > 0,
+       'skill', 'natural') as prompt_type,
+    extract(LogAttributes['prompt'], '\\$([a-z][a-zA-Z0-9_:-]*)') as invoked_name,
+
+    'codex' as source,
+    LogAttributes['project_path'] as project_path,
+    LogAttributes['working_directory'] as working_directory
+FROM claude_code_logs
+WHERE ServiceName ILIKE 'codex%'
+  AND LogAttributes['prompt'] != ''
+  AND LogAttributes['prompt'] != '[REDACTED]';
+
+
+-- ================================================
+-- 8. Frustration Analysis (View)
+-- Detects user frustration via Korean/English keyword patterns
+-- Processes BOTH Claude Code and Codex data uniformly from ai_prompts.
+-- Source column exposed for dashboard filtering/comparison.
+-- Keyword patterns are identical regardless of source (no branching).
 -- ================================================
 CREATE VIEW IF NOT EXISTS frustration_analysis AS
 SELECT
     user_id,
+    source,
     session_id,
     toDate(timestamp) as date,
     count() as total_requests,
@@ -267,27 +368,44 @@ SELECT
 FROM (
     SELECT
         user_id,
+        source,
         session_id,
         timestamp,
         prompt_text,
         prompt_length,
         CASE
+            -- FILTER: Long prompts are likely new tasks, not complaints
             WHEN prompt_length > 150 THEN 0.0
+
+            -- FILTER: Explicit new task signals
             WHEN match(lower(prompt_text), '(create|generate|make|build|write|implement)')
             THEN 0.0
+
+            -- HIGH CONFIDENCE (1.0): Direct negation at START of prompt
+            -- Korean: "아니", "아냐", "잠깐", "틀렸", "잘못"
+            -- English: "no", "wrong", "wait", "stop", "actually"
             WHEN match(prompt_text, '^(아니|아냐|잠깐|잠만|틀렸|잘못|그게 아니)')
                  OR match(lower(prompt_text), '^(no[, ]|nope|wrong|wait|stop|actually|incorrect)')
             THEN 1.0
+
+            -- MEDIUM-HIGH CONFIDENCE (0.8): Repetition/persistence signals
+            -- Korean: "다시", "여전히", "또", "계속"
+            -- English: "again", "still", "retry", "redo"
             WHEN match(prompt_text, '(다시 해|다시해|여전히|또 |계속 안|재시도)')
                  OR match(lower(prompt_text), '(try again|do.?again|still (not|doesn|fail)|retry|redo)')
             THEN 0.8
+
+            -- MEDIUM CONFIDENCE (0.6): Error/fix signals in SHORT prompts only
             WHEN prompt_length < 60 AND (
                 match(prompt_text, '(안돼|안되|에러|오류|고쳐|수정해|실패|버그)')
                 OR match(lower(prompt_text), '(error|fail|fix|broken|bug|doesn.t work)')
             )
             THEN 0.6
+
+            -- LOW CONFIDENCE (0.4): Questioning/confusion signals
             WHEN prompt_length < 80 AND match(prompt_text, '(왜 안|뭐가 문제|이상한데|뭐지)')
             THEN 0.4
+
             ELSE 0.0
         END as frustration_weight
     FROM ai_prompts
@@ -295,4 +413,4 @@ FROM (
       AND length(prompt_text) < 2000
 )
 WHERE user_id != ''
-GROUP BY user_id, session_id, date;
+GROUP BY user_id, source, session_id, date;

@@ -1,6 +1,7 @@
 -- AI Prompts Table
--- Stores all user prompts from Claude Code for analytics and AI coaching
--- Data is inserted via the prompt-logger hook on UserPromptSubmit event
+-- Stores all user prompts from Claude Code and Codex for analytics and AI coaching
+-- Claude Code data inserted via the prompt-logger hook on UserPromptSubmit event
+-- Codex data inserted via codex_prompts_bridge MV from OTEL logs
 --
 -- NOTE: This table uses MergeTree() (not ReplacingMergeTree).
 -- The PATCH endpoint at /api/prompts/[id] inserts duplicate rows for updates.
@@ -22,6 +23,10 @@ CREATE TABLE IF NOT EXISTS ai_prompts (
     prompt_type LowCardinality(String) DEFAULT 'natural',  -- 'natural', 'skill', 'command', 'agent'
     invoked_name String DEFAULT '',  -- Skill slug, command name, or agent name
 
+    -- Source identification (added in migration 012)
+    -- 'claude' for Claude Code prompts (default), 'codex' for Codex prompts
+    source LowCardinality(String) DEFAULT 'claude',
+
     -- Context
     project_path String,
     working_directory String,
@@ -31,7 +36,8 @@ CREATE TABLE IF NOT EXISTS ai_prompts (
     INDEX idx_user_email_time (user_email, timestamp) TYPE minmax GRANULARITY 1,
     INDEX idx_team (team) TYPE bloom_filter GRANULARITY 1,
     INDEX idx_prompt_text (prompt_text) TYPE tokenbf_v1(10240, 3, 0) GRANULARITY 1,
-    INDEX idx_prompt_type (prompt_type) TYPE bloom_filter GRANULARITY 1
+    INDEX idx_prompt_type (prompt_type) TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_source (source) TYPE bloom_filter GRANULARITY 1
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
