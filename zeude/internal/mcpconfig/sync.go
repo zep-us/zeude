@@ -536,7 +536,9 @@ func fetchConfig(agentKey string, cachedVersion string) (*ConfigResponse, error)
 		return nil, fmt.Errorf("config fetch failed: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Limit response size to prevent memory exhaustion (4MB headroom for skills+agents+MCP).
+	const maxConfigResponseSize = 4 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigResponseSize))
 	if err != nil {
 		logDebug("failed to read response body: %v", err)
 		return nil, fmt.Errorf("failed to read response body: %w", err)

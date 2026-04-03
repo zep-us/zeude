@@ -8,6 +8,12 @@ CREATE OR REPLACE FUNCTION toggle_disabled_skill(
 DECLARE
   result TEXT[];
 BEGIN
+  -- Authorization: only allow users to modify their own settings,
+  -- or service_role to modify any user's settings.
+  IF current_setting('role') != 'service_role' AND p_user_id != auth.uid() THEN
+    RAISE EXCEPTION 'Unauthorized: cannot modify another user''s disabled skills';
+  END IF;
+
   IF p_disabled THEN
     -- Add slug (array_append after array_remove to avoid duplicates)
     UPDATE zeude_users

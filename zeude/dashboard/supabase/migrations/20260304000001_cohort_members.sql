@@ -30,3 +30,21 @@ BEGIN
   END IF;
 END
 $$;
+
+-- Authenticated users can read their own cohort memberships
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'zeude_cohort_members'
+      AND policyname = 'Users can read own cohort memberships'
+  ) THEN
+    CREATE POLICY "Users can read own cohort memberships"
+      ON zeude_cohort_members
+      FOR SELECT TO authenticated
+      USING (user_id = auth.uid());
+  END IF;
+END
+$$;
