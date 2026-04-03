@@ -11,7 +11,7 @@ export function createServerClient() {
   return createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY)
 }
 
-// Supabase 쿼리 에러가 DB 연결 문제(ETIMEDOUT, DNS 실패 등)인지 판별
+// Determine if a Supabase query error is a DB connection issue (ETIMEDOUT, DNS failure, etc.)
 export function isDBConnectionError(error: { message?: string; details?: string; code?: string } | null): boolean {
   if (!error) return false
   const msg = `${error.message || ''} ${error.details || ''}`

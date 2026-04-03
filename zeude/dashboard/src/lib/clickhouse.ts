@@ -162,7 +162,7 @@ async function _getSessionsToday(userEmail: string, userId: string = '', source:
   return result.json()
 }
 
-// 30초 캐싱으로 반복 요청 시 DB 부하 감소
+// 30s cache to reduce DB load on repeated requests
 // Cache key includes all dynamic params to prevent collisions across different users/sources
 export function getSessionsToday(userEmail: string, userId: string = '', source: SourceFilter = 'all'): Promise<SessionSummary[]> {
   const cacheKey = ['sessions-today', userEmail, userId, source]
@@ -193,7 +193,7 @@ async function _getDailyStats(userEmail: string, userId: string = '', days: numb
   return result.json()
 }
 
-// 60초 캐싱 (일별 데이터는 자주 변하지 않음)
+// 60s cache (daily data changes infrequently)
 export function getDailyStats(userEmail: string, userId: string = '', days: number = 30, source: SourceFilter = 'all'): Promise<DailyStats[]> {
   const cacheKey = ['daily-stats', userEmail, userId, String(days), source]
   return unstable_cache(_getDailyStats, cacheKey, { revalidate: 60 })(userEmail, userId, days, source)
@@ -238,7 +238,7 @@ async function _getOverviewStats(userEmail: string, userId: string = '', source:
   return rows[0]
 }
 
-// 30초 캐싱
+// 30s cache
 export function getOverviewStats(userEmail: string, userId: string = '', source: SourceFilter = 'all'): Promise<OverviewStats> {
   const cacheKey = ['overview-stats', userEmail, userId, source]
   return unstable_cache(_getOverviewStats, cacheKey, { revalidate: 30 })(userEmail, userId, source)

@@ -75,7 +75,7 @@ When analyzing prompts:
 - Reference successful patterns from team history when available
 - Be concise and actionable
 
-Always respond in Korean (한국어). Keep responses focused and practical.`
+Always respond in English. Keep responses focused and practical.`
 
 export function isOpenRouterConfigured(): boolean {
   return !!env.OPENROUTER_API_KEY

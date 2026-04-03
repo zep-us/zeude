@@ -36,7 +36,7 @@ const getDevMockSession = (): SessionWithUser => ({
   },
 })
 
-// React cache로 동일 요청 내에서 세션 조회 중복 방지
+// React cache to deduplicate session lookups within the same request
 export const getSession = cache(async (): Promise<SessionWithUser | null> => {
   // Skip auth in development mode — fetch real user from DB by MOCK_EMAIL
   if (process.env.NODE_ENV === 'development' && process.env.SKIP_AUTH === 'true') {
@@ -79,7 +79,7 @@ export const getSession = cache(async (): Promise<SessionWithUser | null> => {
 
   const supabase = createServerClient()
 
-  // 필요한 컬럼만 선택하여 데이터 전송량 감소
+  // Select only required columns to reduce data transfer
   const { data: session, error } = await supabase
     .from('zeude_sessions')
     .select('id, token, user_id, expires_at, created_at, user:zeude_users(id, email, name, team, role, status, created_at)')
@@ -91,7 +91,7 @@ export const getSession = cache(async (): Promise<SessionWithUser | null> => {
     console.log('[SESSION] DB query result:', { hasSession: !!session, hasUser: !!session?.user })
   }
 
-  // DB 연결 에러(ETIMEDOUT 등)와 실제 세션 없음을 구분
+  // Distinguish DB connection errors (ETIMEDOUT, etc.) from actual missing sessions
   if (isDBConnectionError(error)) {
     throw new Error('DB_CONNECTION_ERROR')
   }

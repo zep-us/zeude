@@ -29,15 +29,15 @@ interface OpenRouterResponse {
 
 // Keyword patterns for fast matching (no LLM needed)
 const SKILL_KEYWORDS: Record<string, string[]> = {
-  'clarify': ['clarify', 'requirement', '요구사항', '명확', 'unclear', 'ambiguous', 'specify', '정의'],
-  'commit': ['commit', 'git commit', '커밋', 'stage', 'push'],
-  'review-pr': ['review', 'pr', 'pull request', 'code review', '리뷰', 'PR'],
-  'handoff': ['handoff', 'hand off', 'context', '핸드오프', '인수인계', 'transfer'],
+  'clarify': ['clarify', 'requirement', 'unclear', 'ambiguous', 'specify', 'define'],
+  'commit': ['commit', 'git commit', 'stage', 'push'],
+  'review-pr': ['review', 'pr', 'pull request', 'code review', 'PR'],
+  'handoff': ['handoff', 'hand off', 'context', 'transfer', 'hand over'],
   'gha': ['github action', 'gha', 'workflow', 'ci', 'cd', 'pipeline', 'build fail', 'action fail'],
 }
 
 // Words that indicate NO skill should be suggested (must match as whole word)
-const NEGATIVE_KEYWORDS = ['hello', 'hi', 'hey', '안녕', 'thanks', '감사', 'bye', 'debug', 'what is', 'how to', 'explain']
+const NEGATIVE_KEYWORDS = ['hello', 'hi', 'hey', 'thanks', 'thank you', 'bye', 'debug', 'what is', 'how to', 'explain']
 
 // Helper: check if keyword matches as whole word (not substring)
 function matchesWholeWord(text: string, keyword: string): boolean {

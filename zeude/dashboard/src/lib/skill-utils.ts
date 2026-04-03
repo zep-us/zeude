@@ -61,12 +61,12 @@ export async function generateSkillRules(
         content: `You analyze CLI skill definitions and generate trigger keywords for matching user prompts.
 
 Rules for keywords:
-1. Include 10-15 keywords (Korean AND English)
-2. MUST include single-word triggers (e.g., "slack", "슬랙", "github", "깃허브")
-3. Include common phrases users might say (e.g., "이슈 만들어", "PR 리뷰")
-4. Include verb variations (e.g., "보내줘", "전송", "공유")
+1. Include 10-15 keywords
+2. MUST include single-word triggers (e.g., "slack", "github", "deploy")
+3. Include common phrases users might say (e.g., "create issue", "PR review")
+4. Include verb variations (e.g., "send", "post", "share")
 5. Prefer shorter, more general keywords over long specific phrases
-6. Keywords should match substring - "슬랙" will match "슬랙으로 보내줘"
+6. Keywords should match substring - "slack" will match "send via slack"
 
 Return JSON only: {"keywords": ["word1", "word2", ...], "hint": "1-2 sentence guidance"}`
       },

@@ -56,7 +56,7 @@ export function SkillDialog({
           <DialogDescription>
             Create reusable prompts and workflows for your team.{' '}
             <a
-              href="https://code.claude.com/docs/ko/skills#frontmatter-참조"
+              href="https://docs.anthropic.com/en/docs/claude-code/skills"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 font-medium hover:underline"

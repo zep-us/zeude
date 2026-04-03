@@ -60,9 +60,9 @@ export async function POST(req: Request) {
     const userMessage = body.message.toLowerCase()
 
     // Intent detection patterns (more robust than simple includes)
-    const personalAnalysisPattern = /(?:내|나의|my)\s*(?:프롬프트|prompt)|(?:분석|analyze|stats|통계).*(?:프롬프트|prompt)|(?:프롬프트|prompt).*(?:분석|analyze)/i
-    const teamPattern = /(?:팀|team)\s*(?:트렌드|trend|패턴|pattern)|(?:트렌드|trend|패턴|pattern).*(?:팀|team)/i
-    const improvePattern = /(?:개선|improve|better|더\s*잘|향상).*(?:프롬프트|prompt|방법)|(?:프롬프트|prompt).*(?:개선|improve)/i
+    const personalAnalysisPattern = /(?:my)\s*(?:prompt)|(?:analyze|stats).*(?:prompt)|(?:prompt).*(?:analyze)/i
+    const teamPattern = /(?:team)\s*(?:trend|pattern)|(?:trend|pattern).*(?:team)/i
+    const improvePattern = /(?:improve|better).*(?:prompt)|(?:prompt).*(?:improve)/i
 
     // Detect intent and fetch relevant data
     // Use both user.id and email for lookup (covers old data without user_id)
@@ -76,13 +76,13 @@ export async function POST(req: Request) {
       ])
 
       contextData = `
-[사용자 프롬프트 데이터]
-- 최근 30일 총 프롬프트: ${stats.total_prompts}개
-- 평균 길이: ${Math.round(stats.avg_length)}자
-- 세션 수: ${stats.unique_sessions}개
-- 주요 프로젝트: ${stats.top_projects.map(p => p.project.split('/').pop()).join(', ') || '없음'}
+[User Prompt Data]
+- Total prompts (last 30 days): ${stats.total_prompts}
+- Average length: ${Math.round(stats.avg_length)} chars
+- Sessions: ${stats.unique_sessions}
+- Top projects: ${stats.top_projects.map(p => p.project.split('/').pop()).join(', ') || 'none'}
 
-[최근 프롬프트 샘플]
+[Recent Prompt Samples]
 ${prompts.slice(0, 5).map((p, i) => `${i + 1}. "${p.prompt_text.substring(0, 100)}..."`).join('\n')}
 `
     } else if (teamPattern.test(userMessage)) {
@@ -93,10 +93,10 @@ ${prompts.slice(0, 5).map((p, i) => `${i + 1}. "${p.prompt_text.substring(0, 100
       ])
 
       contextData = `
-[팀 트렌드 데이터 - 최근 14일]
-${trends.slice(0, 7).map(t => `- ${t.date}: ${t.total_prompts}개 프롬프트, ${t.unique_users}명 사용자, 평균 ${Math.round(Number(t.avg_length))}자`).join('\n')}
+[Team Trend Data - Last 14 Days]
+${trends.slice(0, 7).map(t => `- ${t.date}: ${t.total_prompts} prompts, ${t.unique_users} users, avg ${Math.round(Number(t.avg_length))} chars`).join('\n')}
 
-[팀 프롬프트 패턴 - 최근 샘플]
+[Team Prompt Patterns - Recent Samples]
 ${patterns.slice(0, 5).map((p, i) => {
         const displayName = p.user_email ? p.user_email.split('@')[0] : (p.user_id || 'Unknown')
         return `${i + 1}. [${displayName}] "${p.prompt_text.substring(0, 80)}..."`
@@ -107,7 +107,7 @@ ${patterns.slice(0, 5).map((p, i) => {
       const prompts = await getUserPrompts(userIdentifier, 10)
 
       contextData = `
-[개선 요청 - 사용자의 최근 프롬프트]
+[Improvement Request - User's Recent Prompts]
 ${prompts.slice(0, 5).map((p, i) => `${i + 1}. "${p.prompt_text.substring(0, 150)}${p.prompt_text.length > 150 ? '...' : ''}"`).join('\n')}
 `
     }
@@ -121,7 +121,7 @@ ${prompts.slice(0, 5).map((p, i) => `${i + 1}. "${p.prompt_text.substring(0, 150
     if (contextData) {
       messages.push({
         role: 'system',
-        content: `다음은 사용자의 프롬프트 데이터입니다:\n${contextData}`
+        content: `Here is the user's prompt data:\n${contextData}`
       })
     }
 
@@ -144,7 +144,7 @@ ${prompts.slice(0, 5).map((p, i) => `${i + 1}. "${p.prompt_text.substring(0, 150
       maxTokens: 1024,
     })
 
-    const assistantMessage = completion.choices[0]?.message?.content || '응답을 생성할 수 없습니다.'
+    const assistantMessage = completion.choices[0]?.message?.content || 'Unable to generate a response.'
 
     return Response.json({
       message: assistantMessage,

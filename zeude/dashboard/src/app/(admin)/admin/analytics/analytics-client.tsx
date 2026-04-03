@@ -578,7 +578,7 @@ export default function AnalyticsClient() {
             All Users Token Dashboard
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            전체 사용자 기준 토큰 사용량 (상위 10명 제한 없음)
+            Token usage across all users (no top-10 limit)
           </p>
         </CardHeader>
         <CardContent>
@@ -761,9 +761,9 @@ export default function AnalyticsClient() {
                         </TooltipTrigger>
                         <TooltipContent className="lg:hidden">
                           <div className="text-xs space-y-1">
-                            <div>비용 효율: {Math.round((user.costEfficiency || 0) * 100)}%</div>
-                            <div>작업 품질: {Math.round((user.workQuality || 0) * 100)}%</div>
-                            <div>컨텍스트 규율: {Math.round((user.contextEfficiency || 0) * 100)}%</div>
+                            <div>Cost efficiency: {Math.round((user.costEfficiency || 0) * 100)}%</div>
+                            <div>Work quality: {Math.round((user.workQuality || 0) * 100)}%</div>
+                            <div>Context discipline: {Math.round((user.contextEfficiency || 0) * 100)}%</div>
                           </div>
                         </TooltipContent>
                       </UITooltip>
@@ -776,7 +776,7 @@ export default function AnalyticsClient() {
                               💰 {Math.round((user.costEfficiency || 0) * 100)}
                             </Badge>
                           </TooltipTrigger>
-                          <TooltipContent>비용 효율성 (output/cost)</TooltipContent>
+                          <TooltipContent>Cost efficiency (output/cost)</TooltipContent>
                         </UITooltip>
                         <UITooltip>
                           <TooltipTrigger>
@@ -784,7 +784,7 @@ export default function AnalyticsClient() {
                               ✅ {Math.round((user.workQuality || 0) * 100)}
                             </Badge>
                           </TooltipTrigger>
-                          <TooltipContent>작업 품질 (1 - retry)</TooltipContent>
+                          <TooltipContent>Work quality (1 - retry)</TooltipContent>
                         </UITooltip>
                         <UITooltip>
                           <TooltipTrigger>
@@ -792,7 +792,7 @@ export default function AnalyticsClient() {
                               📦 {Math.round((user.contextEfficiency || 0) * 100)}
                             </Badge>
                           </TooltipTrigger>
-                          <TooltipContent>컨텍스트 규율 (1 / growth)</TooltipContent>
+                          <TooltipContent>Context discipline (1 / growth)</TooltipContent>
                         </UITooltip>
                       </div>
                     </TableCell>

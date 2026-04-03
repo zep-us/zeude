@@ -52,7 +52,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 Cohort: <span className="font-mono">{data.cohort.cohortKey}</span> ({data.cohort.memberCount} members)
               </p>
               {data.cohort.startedAt && (
-                <p>집계 시작: {formatKstDateTime(data.cohort.startedAt)} (KST)</p>
+                <p>Started: {formatKstDateTime(data.cohort.startedAt)} (KST)</p>
               )}
             </div>
           )}
@@ -70,13 +70,13 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
           <CardContent className="pt-6">
             <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
               <div>
-                <p className="text-muted-foreground">{data.cohort ? '현재 집계 구간' : '이번 주 집계 구간'}</p>
+                <p className="text-muted-foreground">{data.cohort ? 'Current period' : 'This week'}</p>
                 <p className="font-medium">
                   {formatKstDateTime(data.weekWindow.currentStart)} ~ {formatKstDateTime(data.weekWindow.currentEnd)}
                 </p>
               </div>
               <div>
-                <p className="text-muted-foreground">{data.cohort ? '스킬 집계 일자' : '지난주 최종 구간'}</p>
+                <p className="text-muted-foreground">{data.cohort ? 'Skill tracking period' : 'Last week'}</p>
                 {data.cohort?.skillDayStart && data.cohort?.skillDayEnd ? (
                   <p className="font-medium">
                     {formatKstDateTime(data.cohort.skillDayStart)} ~ {formatKstDateTime(data.cohort.skillDayEnd)}
@@ -88,7 +88,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 )}
               </div>
               <div>
-                <p className="text-muted-foreground">다음 리셋</p>
+                <p className="text-muted-foreground">Next reset</p>
                 <p className="font-medium">{formatKstDateTime(data.weekWindow.nextReset)} (KST)</p>
               </div>
             </div>
@@ -105,7 +105,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 Cohort Token Rank
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                코호트 등록 시각 이후 누적 토큰
+                Cumulative tokens since cohort registration
               </p>
             </CardHeader>
             <CardContent>
@@ -132,7 +132,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
-                  코호트 토큰 데이터가 아직 없습니다
+                  No cohort token data yet
                 </div>
               )}
             </CardContent>
@@ -145,7 +145,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 Cohort Skill Rank
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                코호트 당일 사용 스킬 순위
+                Cohort skill usage today
               </p>
             </CardHeader>
             <CardContent>
@@ -186,7 +186,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
-                  코호트 스킬 데이터가 아직 없습니다
+                  No cohort skill data yet
                 </div>
               )}
             </CardContent>
@@ -202,7 +202,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                   This Week Token Rank
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Monday 08:00 KST reset 이후 누적 토큰
+                  Cumulative tokens since Monday 08:00 KST reset
                 </p>
               </CardHeader>
               <CardContent>
@@ -231,7 +231,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                   </div>
                 ) : (
                   <div className="text-center py-8 text-muted-foreground">
-                    이번 주 데이터가 아직 없습니다
+                    No data this week yet
                   </div>
                 )}
               </CardContent>
@@ -244,7 +244,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                   Last Week Final Rank
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  직전 주차의 최종 토큰 순위
+                  Final token ranking from the previous week
                 </p>
               </CardHeader>
               <CardContent>
@@ -273,7 +273,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                   </div>
                 ) : (
                   <div className="text-center py-8 text-muted-foreground">
-                    지난주 데이터가 아직 없습니다
+                    No data from last week
                   </div>
                 )}
               </CardContent>
@@ -287,7 +287,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 Top Skills This Week
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                가장 많이 호출된 스킬 순위
+                Most invoked skills this week
               </p>
             </CardHeader>
             <CardContent>
@@ -328,7 +328,7 @@ export default function LeaderboardClient({ initialCohort }: { initialCohort: st
                 </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
-                  스킬 사용 데이터가 아직 없습니다
+                  No skill usage data yet
                 </div>
               )}
             </CardContent>

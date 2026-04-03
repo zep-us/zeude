@@ -10,9 +10,9 @@ import { ChatMessage } from './chat-message'
 import { ChatInput } from './chat-input'
 
 const QUICK_ACTIONS = [
-  { label: '내 프롬프트 분석', prompt: '내 최근 프롬프트를 분석해줘' },
-  { label: '팀 트렌드', prompt: '팀 프롬프트 트렌드 보여줘' },
-  { label: '프롬프트 개선', prompt: '내 프롬프트 개선 방법을 알려줘' },
+  { label: 'Analyze my prompts', prompt: 'Analyze my recent prompts' },
+  { label: 'Team trends', prompt: 'Show team prompt trends' },
+  { label: 'Improve prompts', prompt: 'How can I improve my prompts?' },
 ]
 
 export function ChatWidget() {
@@ -61,7 +61,7 @@ export function ChatWidget() {
         <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b bg-muted/30 relative z-10">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
-            <span className="font-medium text-sm">AI 프롬프트 코치</span>
+            <span className="font-medium text-sm">AI Prompt Coach</span>
           </div>
           <div className="flex items-center gap-1">
             <Button
@@ -69,7 +69,7 @@ export function ChatWidget() {
               size="icon"
               className="h-7 w-7"
               onClick={clearMessages}
-              title="대화 초기화"
+              title="Clear conversation"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
@@ -90,7 +90,7 @@ export function ChatWidget() {
             <div className="h-full flex flex-col items-center justify-center text-center">
               <Sparkles className="h-8 w-8 text-muted-foreground mb-3" />
               <p className="text-sm text-muted-foreground mb-4">
-                프롬프트 분석 및 개선 제안을 받아보세요
+                Get prompt analysis and improvement suggestions
               </p>
               <div className="flex flex-wrap gap-2 justify-center">
                 {QUICK_ACTIONS.map((action) => (
@@ -120,7 +120,7 @@ export function ChatWidget() {
                         <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                         <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                       </div>
-                      <span>생각 중...</span>
+                      <span>Thinking...</span>
                     </div>
                   </div>
                 </div>
