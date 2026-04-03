@@ -67,8 +67,11 @@ describe('GET /api/admin/skills', () => {
 
   it('returns skills and teams on success', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
-    const mockSkills = [{ id: '1', name: 'Skill 1', slug: 'skill-1' }]
-    const mockTeams = [{ team: 'team-a' }, { team: 'team-b' }]
+    const mockSkills = [{ id: '1', name: 'Skill 1', slug: 'skill-1', created_by: null, contributors: [] }]
+    const mockUsersData = [
+      { id: 'u1', name: 'Alice', email: 'alice@test.com', team: 'team-a', status: 'active' },
+      { id: 'u2', name: 'Bob', email: 'bob@test.com', team: 'team-b', status: 'active' },
+    ]
 
     mockFrom.mockImplementation((table: string) => {
       if (table === 'zeude_skills') {
@@ -81,7 +84,7 @@ describe('GET /api/admin/skills', () => {
       if (table === 'zeude_users') {
         return {
           select: vi.fn().mockReturnValue({
-            order: vi.fn().mockResolvedValue({ data: mockTeams, error: null }),
+            order: vi.fn().mockResolvedValue({ data: mockUsersData, error: null }),
           }),
         }
       }
@@ -90,7 +93,8 @@ describe('GET /api/admin/skills', () => {
     const res = await GET()
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.skills).toEqual(mockSkills)
+    expect(json.skills).toHaveLength(1)
+    expect(json.skills[0].id).toBe('1')
     expect(json.teams).toEqual(['team-a', 'team-b'])
   })
 })

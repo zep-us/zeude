@@ -85,7 +85,12 @@ describe('PATCH /api/admin/users/[id]', () => {
   // AC-87: PostgREST injection prevention — valid team names pass through
   it('accepts valid team name: engineering', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+        }),
+      }),
       update: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -96,7 +101,7 @@ describe('PATCH /api/admin/users/[id]', () => {
           }),
         }),
       }),
-    })
+    }))
 
     const res = await PATCH(makePatchRequest({ team: 'engineering' }), makeParams(VALID_UUID))
     expect(res.status).toBe(200)
@@ -104,7 +109,12 @@ describe('PATCH /api/admin/users/[id]', () => {
 
   it('accepts valid team name: team-alpha', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+        }),
+      }),
       update: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -115,7 +125,7 @@ describe('PATCH /api/admin/users/[id]', () => {
           }),
         }),
       }),
-    })
+    }))
 
     const res = await PATCH(makePatchRequest({ team: 'team-alpha' }), makeParams(VALID_UUID))
     expect(res.status).toBe(200)
@@ -123,7 +133,12 @@ describe('PATCH /api/admin/users/[id]', () => {
 
   it('accepts valid team name: QA_team', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+        }),
+      }),
       update: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -134,7 +149,7 @@ describe('PATCH /api/admin/users/[id]', () => {
           }),
         }),
       }),
-    })
+    }))
 
     const res = await PATCH(makePatchRequest({ team: 'QA_team' }), makeParams(VALID_UUID))
     expect(res.status).toBe(200)
@@ -142,7 +157,12 @@ describe('PATCH /api/admin/users/[id]', () => {
 
   it('accepts valid team name: Team123', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+        }),
+      }),
       update: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -153,7 +173,7 @@ describe('PATCH /api/admin/users/[id]', () => {
           }),
         }),
       }),
-    })
+    }))
 
     const res = await PATCH(makePatchRequest({ team: 'Team123' }), makeParams(VALID_UUID))
     expect(res.status).toBe(200)
@@ -212,6 +232,13 @@ describe('PATCH /api/admin/users/[id]', () => {
   // Self-protection
   it('prevents admin from demoting themselves', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+        }),
+      }),
+    }))
     const res = await PATCH(makePatchRequest({ role: 'member' }), makeParams(ADMIN_UUID))
     expect(res.status).toBe(400)
     const json = await res.json()
@@ -220,6 +247,13 @@ describe('PATCH /api/admin/users/[id]', () => {
 
   it('prevents admin from deactivating themselves', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+        }),
+      }),
+    }))
     const res = await PATCH(makePatchRequest({ status: 'inactive' }), makeParams(ADMIN_UUID))
     expect(res.status).toBe(400)
     const json = await res.json()

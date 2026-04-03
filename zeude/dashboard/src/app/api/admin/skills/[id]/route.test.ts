@@ -80,7 +80,12 @@ describe('PATCH /api/admin/skills/[id]', () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
     let updatedData: Record<string, unknown> = {}
 
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      }),
       update: vi.fn().mockImplementation((data: Record<string, unknown>) => {
         updatedData = data
         return {
@@ -91,7 +96,7 @@ describe('PATCH /api/admin/skills/[id]', () => {
           }),
         }
       }),
-    })
+    }))
 
     const res = await PATCH(
       makePatchRequest({ content: '# Updated content' }),
@@ -144,7 +149,12 @@ describe('PATCH /api/admin/skills/[id]', () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
     let updatedData: Record<string, unknown> = {}
 
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      }),
       update: vi.fn().mockImplementation((data: Record<string, unknown>) => {
         updatedData = data
         return {
@@ -155,7 +165,7 @@ describe('PATCH /api/admin/skills/[id]', () => {
           }),
         }
       }),
-    })
+    }))
 
     const files = { 'SKILL.md': '# Updated', 'lib/helper.ts': 'export const x = 1' }
     const res = await PATCH(makePatchRequest({ files }), makeParams('id-1'))
@@ -178,7 +188,12 @@ describe('PATCH /api/admin/skills/[id]', () => {
   it('allows setting isGlobal=false with teams', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
 
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      }),
       update: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -189,7 +204,7 @@ describe('PATCH /api/admin/skills/[id]', () => {
           }),
         }),
       }),
-    })
+    }))
 
     const res = await PATCH(
       makePatchRequest({ isGlobal: false, teams: ['team-a'] }),
@@ -202,7 +217,12 @@ describe('PATCH /api/admin/skills/[id]', () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
     let updatedData: Record<string, unknown> = {}
 
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      }),
       update: vi.fn().mockImplementation((data: Record<string, unknown>) => {
         updatedData = data
         return {
@@ -213,7 +233,7 @@ describe('PATCH /api/admin/skills/[id]', () => {
           }),
         }
       }),
-    })
+    }))
 
     const res = await PATCH(
       makePatchRequest({ isGlobal: true }),
@@ -251,7 +271,12 @@ describe('PATCH /api/admin/skills/[id]', () => {
   it('returns 400 for duplicate slug (23505)', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
 
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      }),
       update: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -262,7 +287,7 @@ describe('PATCH /api/admin/skills/[id]', () => {
           }),
         }),
       }),
-    })
+    }))
 
     const res = await PATCH(
       makePatchRequest({ slug: 'taken-slug' }),
@@ -276,7 +301,12 @@ describe('PATCH /api/admin/skills/[id]', () => {
   it('returns 400 for check constraint violation (23514)', async () => {
     mockGetSession.mockResolvedValue(adminSession() as never)
 
-    mockFrom.mockReturnValue({
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      }),
       update: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
@@ -287,7 +317,7 @@ describe('PATCH /api/admin/skills/[id]', () => {
           }),
         }),
       }),
-    })
+    }))
 
     const res = await PATCH(
       makePatchRequest({ name: 'Updated' }),

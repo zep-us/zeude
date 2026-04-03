@@ -14,6 +14,10 @@ export async function PATCH(
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
+    if (session.user.role !== 'admin') {
+      return Response.json({ error: 'Admin access required' }, { status: 403 })
+    }
+
     const { id } = await params
     const body = await req.json()
     const {
@@ -162,6 +166,10 @@ export async function DELETE(
 
     if (!session) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
+    }
+
+    if (session.user.role !== 'admin') {
+      return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 
     const { id } = await params
