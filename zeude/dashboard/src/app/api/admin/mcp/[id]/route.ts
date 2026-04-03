@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 
-// PATCH: Update MCP server
+// PATCH: Update MCP server (authenticated)
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -13,15 +13,11 @@ export async function PATCH(
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
-    }
-
     const { id } = await params
     const body = await req.json()
 
     // Only allow updating specific fields
-    const allowedFields = ['name', 'command', 'args', 'env', 'teams', 'is_global', 'status']
+    const allowedFields = ['name', 'url', 'command', 'args', 'env', 'teams', 'is_global', 'status']
     const updates: Record<string, unknown> = {}
 
     for (const field of allowedFields) {
@@ -62,7 +58,7 @@ export async function PATCH(
   }
 }
 
-// DELETE: Delete MCP server
+// DELETE: Delete MCP server (authenticated)
 export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -72,10 +68,6 @@ export async function DELETE(
 
     if (!session) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 
     const { id } = await params

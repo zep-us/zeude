@@ -1,33 +1,44 @@
 import { getSession } from '@/lib/session'
-import { getClickHouseClient } from '@/lib/clickhouse'
+import { getClickHouseClient, buildMVSourceCondition, parseSourceParam, escapeClickHouseString } from '@/lib/clickhouse'
 import { createServerClient } from '@/lib/supabase'
-import { calculateEfficiencyScore } from '@/lib/efficiency'
 import { EXCLUDED_SKILLS } from '@/lib/skill-utils'
+import { resolveUserNames } from '@/lib/name-resolution'
 
 interface LeaderboardUser {
   rank: number
   userName: string
   value: number
   formattedValue: string
-}
-
-interface SkillLeaderboardUser {
-  rank: number
-  userName: string
-  skillCount: number
-  topSkill: string
+  userId: string
 }
 
 interface LeaderboardResponse {
   topTokenUsers: LeaderboardUser[]
-  topEfficiencyUsers: LeaderboardUser[]
-  topSkillUsers: SkillLeaderboardUser[]
-  skillAdoption: {
-    totalUsers: number
-    skillUsers: number
-    adoptionRate: number
+  previousTopTokenUsers: LeaderboardUser[]
+  topSkills: {
+    rank: number
+    skillName: string
+    description: string
+    usageCount: number
+    userCount: number
+    topUsers: string[]
+    formattedValue: string
+  }[]
+  weekWindow: {
+    currentStart: string
+    currentEnd: string
+    previousStart: string
+    previousEnd: string
+    nextReset: string
+    timezone: 'Asia/Seoul'
   }
-  period: string
+  cohort?: {
+    cohortKey: string
+    memberCount: number
+    startedAt?: string
+    skillDayStart?: string
+    skillDayEnd?: string
+  }
   updatedAt: string
 }
 
@@ -40,10 +51,6 @@ export async function GET(req: Request) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const { searchParams } = new URL(req.url)
-    const period = searchParams.get('period') || '7d'
-    const days = period === '30d' ? 30 : period === '90d' ? 90 : 7
-
     const clickhouse = getClickHouseClient()
 
     if (!clickhouse) {
@@ -53,12 +60,44 @@ export async function GET(req: Request) {
       )
     }
 
+    const { searchParams } = new URL(req.url)
+    const cohortKey = sanitizeCohortKey(searchParams.get('cohort') || '')
+    const source = parseSourceParam(searchParams.get('source'))
+    const sourceFilter = buildMVSourceCondition(source)
+
+    const weekWindow = getWeeklyWindow(new Date())
+    const excludedSkills = EXCLUDED_SKILLS.map(escapeClickHouseString).join(', ')
+    const excludedSkillClause = excludedSkills ? `AND d_invoked_name NOT IN (${excludedSkills})` : ''
+    const cohortFilter = cohortKey
+      ? await resolveCohortFilter(cohortKey, clickhouse)
+      : null
+
+    if (cohortFilter && cohortFilter.memberCount === 0) {
+      return Response.json(buildEmptyLeaderboardResponse(weekWindow, cohortKey, 0))
+    }
+
+    const tokenCurrentStartEpoch = cohortFilter ? cohortFilter.startedAtEpoch : weekWindow.currentStartEpoch
+    const tokenCurrentStartUtcMs = cohortFilter ? cohortFilter.startedAtUtcMs : weekWindow.currentStartUtcMs
+    const tokenPreviousStartEpoch = cohortFilter ? cohortFilter.startedAtEpoch : weekWindow.previousStartEpoch
+    const tokenPreviousEndEpoch = cohortFilter ? cohortFilter.startedAtEpoch : weekWindow.currentStartEpoch
+    const skillWindow = cohortFilter
+      ? getKstDayWindowFromUtcMs(cohortFilter.startedAtUtcMs)
+      : {
+          startEpoch: weekWindow.currentStartEpoch,
+          endEpoch: weekWindow.currentEndEpoch,
+          startUtcMs: weekWindow.currentStartUtcMs,
+          endUtcMs: weekWindow.currentEndUtcMs,
+        }
+
+    const tokenCohortClause = buildIdOnlyCohortWhereClause('user_id', cohortFilter)
+    const promptCohortClause = buildCohortWhereClause('d_user_id', 'd_user_email', cohortFilter)
+
     try {
       // Run all queries in parallel with graceful degradation
       // Uses allSettled so a single slow/failing query doesn't take down the entire endpoint
       // Group by user_id for consistent identification (works for both email and Bedrock users)
       const results = await Promise.allSettled([
-        // [0] Top 10 by total tokens used
+        // [0] Current week top token users (week resets Monday 08:00 KST)
         clickhouse.query({
           query: `
             SELECT
@@ -66,8 +105,11 @@ export async function GET(req: Request) {
               any(user_email) as user_email,
               sum(input_tokens + output_tokens + cache_read_tokens) as total_tokens
             FROM token_usage_hourly
-            WHERE hour >= now() - INTERVAL ${days} DAY
+            WHERE hour >= toDateTime(${tokenCurrentStartEpoch})
+              AND hour < toDateTime(${weekWindow.currentEndEpoch})
               AND user_id != ''
+              ${tokenCohortClause}
+              ${sourceFilter}
             GROUP BY user_id
             ORDER BY total_tokens DESC
             LIMIT 10
@@ -75,39 +117,35 @@ export async function GET(req: Request) {
           format: 'JSONEachRow',
         }),
 
-        // [1] Top 10 by composite efficiency score - minimum 10 requests to qualify
-        // Uses token_usage_hourly only (no expensive view JOINs)
-        // retry_density and growth_rate use defaults since the analysis views
-        // scan all of claude_code_logs with window functions and timeout on large datasets
+        // [1] Previous week top token users (last Monday 08:00 KST cycle)
         clickhouse.query({
           query: `
             SELECT
               user_id,
               any(user_email) as user_email,
-              sum(output_tokens) as output_tokens,
-              sum(cost_usd) as cost_usd,
-              sum(cache_read_tokens) as cache_read_tokens,
-              sum(request_count) as total_requests,
-              0.10 as retry_density,
-              2.0 as growth_rate
+              sum(input_tokens + output_tokens + cache_read_tokens) as total_tokens
             FROM token_usage_hourly
-            WHERE hour >= now() - INTERVAL ${days} DAY AND user_id != ''
+            WHERE hour >= toDateTime(${tokenPreviousStartEpoch})
+              AND hour < toDateTime(${tokenPreviousEndEpoch})
+              AND user_id != ''
+              ${tokenCohortClause}
+              ${sourceFilter}
             GROUP BY user_id
-            HAVING total_requests >= 10
+            ORDER BY total_tokens DESC
+            LIMIT 10
           `,
           format: 'JSONEachRow',
         }),
 
-        // [2] Top 10 by skill usage (most skill invocations)
+        // [2] Current week top skills by usage
         // Excludes internal/testing skills defined in EXCLUDED_SKILLS
         // Uses dedup subquery: ai_prompts uses MergeTree, PATCH inserts duplicate rows
         clickhouse.query({
           query: `
             SELECT
-              d_user_id as user_id,
-              any(d_user_email) as user_email,
-              count() as skill_count,
-              topK(1)(d_invoked_name)[1] as top_skill
+              d_invoked_name as skill_name,
+              count() as usage_count,
+              uniqExact(d_user_id) as user_count
             FROM (
               SELECT
                 prompt_id,
@@ -116,43 +154,49 @@ export async function GET(req: Request) {
                 argMax(prompt_type, timestamp) as d_prompt_type,
                 argMax(invoked_name, timestamp) as d_invoked_name
               FROM ai_prompts
-              WHERE timestamp >= now() - INTERVAL ${days} DAY
+              WHERE timestamp >= toDateTime(${skillWindow.startEpoch})
+                AND timestamp < toDateTime(${skillWindow.endEpoch})
                 AND user_id != ''
               GROUP BY prompt_id
             )
             WHERE d_prompt_type IN ('skill', 'command')
               AND d_invoked_name != ''
-              AND d_invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
-            GROUP BY d_user_id
-            ORDER BY skill_count DESC
-            LIMIT 10
+              ${excludedSkillClause}
+              ${promptCohortClause}
+            GROUP BY d_invoked_name
+            ORDER BY usage_count DESC, user_count DESC
+            LIMIT 20
           `,
           format: 'JSONEachRow',
         }),
 
-        // [3] Skill adoption rate (how many users use skills)
-        // Excludes internal/testing skills defined in EXCLUDED_SKILLS
-        // Uses dedup subquery: ai_prompts uses MergeTree, PATCH inserts duplicate rows
+        // [3] Per-skill user breakdown (top users per skill)
         clickhouse.query({
           query: `
             SELECT
-              count(DISTINCT d_user_id) as total_users,
-              count(DISTINCT CASE
-                WHEN d_prompt_type IN ('skill', 'command')
-                  AND d_invoked_name NOT IN (${EXCLUDED_SKILLS.map(s => `'${s}'`).join(', ')})
-                THEN d_user_id
-              END) as skill_users
+              d_invoked_name as skill_name,
+              d_user_id as user_id,
+              d_user_email as user_email,
+              count() as usage_count
             FROM (
               SELECT
                 prompt_id,
                 argMax(user_id, timestamp) as d_user_id,
+                argMax(user_email, timestamp) as d_user_email,
                 argMax(prompt_type, timestamp) as d_prompt_type,
                 argMax(invoked_name, timestamp) as d_invoked_name
               FROM ai_prompts
-              WHERE timestamp >= now() - INTERVAL ${days} DAY
+              WHERE timestamp >= toDateTime(${skillWindow.startEpoch})
+                AND timestamp < toDateTime(${skillWindow.endEpoch})
                 AND user_id != ''
               GROUP BY prompt_id
             )
+            WHERE d_prompt_type IN ('skill', 'command')
+              AND d_invoked_name != ''
+              ${excludedSkillClause}
+              ${promptCohortClause}
+            GROUP BY d_invoked_name, d_user_id, d_user_email
+            ORDER BY d_invoked_name, usage_count DESC
           `,
           format: 'JSONEachRow',
         }),
@@ -160,170 +204,40 @@ export async function GET(req: Request) {
 
       // Extract results with graceful fallbacks
       const tokenDataRaw = results[0].status === 'fulfilled' ? await results[0].value.json() : []
-      const efficiencyDataRaw = results[1].status === 'fulfilled' ? await results[1].value.json() : []
-      const skillUsersDataRaw = results[2].status === 'fulfilled' ? await results[2].value.json() : []
-      const skillAdoptionDataRaw = results[3].status === 'fulfilled' ? await results[3].value.json() : []
+      const previousTokenDataRaw = results[1].status === 'fulfilled' ? await results[1].value.json() : []
+      const skillDataRaw = results[2].status === 'fulfilled' ? await results[2].value.json() : []
+      const skillUsersDataRaw = results[3].status === 'fulfilled' ? await results[3].value.json() : []
 
       // Log any failed queries for debugging
       for (let i = 0; i < results.length; i++) {
         if (results[i].status === 'rejected') {
-          const labels = ['token', 'efficiency', 'skillUsers', 'skillAdoption']
+          const labels = ['tokenCurrent', 'tokenPrevious', 'topSkills', 'skillUsers']
           console.error(`Leaderboard ${labels[i]} query failed:`, (results[i] as PromiseRejectedResult).reason)
         }
       }
 
       const tokenData = tokenDataRaw as { user_id: string; user_email: string; total_tokens: string }[]
-      const efficiencyData = efficiencyDataRaw as { user_id: string; user_email: string; output_tokens: string; cost_usd: string; cache_read_tokens: string; total_requests: string; retry_density: number; growth_rate: number }[]
-      const skillUsersData = skillUsersDataRaw as { user_id: string; user_email: string; skill_count: string; top_skill: string }[]
-      const skillAdoptionData = skillAdoptionDataRaw as { total_users: string; skill_users: string }[]
+      const previousTokenData = previousTokenDataRaw as { user_id: string; user_email: string; total_tokens: string }[]
+      const skillData = skillDataRaw as { skill_name: string; usage_count: string; user_count: string }[]
+      const skillUsersData = skillUsersDataRaw as { skill_name: string; user_id: string; user_email: string; usage_count: string }[]
 
       // Collect all user_ids for name/email lookup
       const allUserIds = new Set<string>()
       for (const row of tokenData) {
         if (row.user_id) allUserIds.add(row.user_id)
       }
-      for (const row of efficiencyData) {
+      for (const row of previousTokenData) {
         if (row.user_id) allUserIds.add(row.user_id)
       }
       for (const row of skillUsersData) {
         if (row.user_id) allUserIds.add(row.user_id)
       }
 
-      // Lookup zeude.user.id from ClickHouse to map to Supabase UUID
-      const userIdToZeudeId = new Map<string, string>()  // ClickHouse user_id -> Supabase UUID
-      const userIdToEmail = new Map<string, string>()
-
-      // Metadata lookup phase: wrapped in try/catch for graceful degradation
-      // If lookup fails, leaderboard still works with user_id/email as display names
-      try {
-        if (allUserIds.size > 0) {
-          const userIdList = Array.from(allUserIds).map(id => `'${id}'`).join(',')
-          // Use GROUP BY with argMax to get deterministic 1:1 mapping per user_id
-          // Time-bounded to leverage partition pruning on claude_code_logs
-          const lookupResult = await clickhouse.query({
-            query: `
-              SELECT
-                LogAttributes['user.id'] as user_id,
-                argMax(LogAttributes['user.email'], Timestamp) as user_email,
-                argMax(ResourceAttributes['zeude.user.id'], Timestamp) as zeude_user_id,
-                argMax(ResourceAttributes['zeude.user.email'], Timestamp) as zeude_user_email
-              FROM claude_code_logs
-              WHERE Timestamp >= now() - INTERVAL 90 DAY
-                AND LogAttributes['user.id'] IN (${userIdList})
-              GROUP BY user_id
-            `,
-            format: 'JSONEachRow',
-          })
-          const lookupData = await lookupResult.json() as { user_id: string; user_email: string; zeude_user_id: string; zeude_user_email: string }[]
-          for (const row of lookupData) {
-            if (row.user_email) {
-              userIdToEmail.set(row.user_id, row.user_email)
-            } else if (row.zeude_user_email) {
-              userIdToEmail.set(row.user_id, row.zeude_user_email)
-            }
-            if (row.zeude_user_id) {
-              userIdToZeudeId.set(row.user_id, row.zeude_user_id)
-            }
-          }
-        }
-      } catch (lookupError) {
-        console.error('Leaderboard user lookup failed (continuing with IDs):', lookupError)
-      }
-
-      // Lookup names from Supabase for all users
-      const userIdToName = new Map<string, string>()
-      const allZeudeIds = new Set<string>(userIdToZeudeId.values())
-
-      // Also add emails as potential lookup keys (for users where email = zeude user id pattern)
-      const allEmails = new Set<string>()
-      for (const row of tokenData) {
-        if (row.user_email) allEmails.add(row.user_email)
-      }
-      for (const row of efficiencyData) {
-        if (row.user_email) allEmails.add(row.user_email)
-      }
-      for (const row of skillUsersData) {
-        if (row.user_email) allEmails.add(row.user_email)
-      }
-      for (const email of userIdToEmail.values()) {
-        allEmails.add(email)
-      }
-
-      try {
-        if (allZeudeIds.size > 0 || allEmails.size > 0) {
-          const supabase = createServerClient()
-          const zeudeIdToName = new Map<string, string>()
-          const emailToName = new Map<string, string>()
-
-          // Query by zeude_id (Supabase UUID)
-          if (allZeudeIds.size > 0) {
-            const { data: usersByZeudeId } = await supabase
-              .from('zeude_users')
-              .select('id, name, email')
-              .in('id', Array.from(allZeudeIds))
-
-            if (usersByZeudeId) {
-              for (const user of usersByZeudeId) {
-                if (user.name) {
-                  zeudeIdToName.set(user.id, user.name)
-                  if (user.email) emailToName.set(user.email, user.name)
-                }
-              }
-            }
-          }
-
-          // Query by email
-          if (allEmails.size > 0) {
-            const { data: usersByEmail } = await supabase
-              .from('zeude_users')
-              .select('id, name, email')
-              .in('email', Array.from(allEmails))
-
-            if (usersByEmail) {
-              for (const user of usersByEmail) {
-                if (user.name) {
-                  if (!zeudeIdToName.has(user.id)) zeudeIdToName.set(user.id, user.name)
-                  if (user.email && !emailToName.has(user.email)) emailToName.set(user.email, user.name)
-                }
-              }
-            }
-          }
-
-          // Map zeude_id -> name back to ClickHouse user_id
-          for (const [userId, zeudeId] of userIdToZeudeId) {
-            if (zeudeIdToName.has(zeudeId)) {
-              userIdToName.set(userId, zeudeIdToName.get(zeudeId)!)
-            }
-          }
-          // Also map by email for users in tokenData/efficiencyData/skillUsersData
-          for (const row of tokenData) {
-            if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-              userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-            }
-          }
-          for (const row of efficiencyData) {
-            if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-              userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-            }
-          }
-          for (const row of skillUsersData) {
-            if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-              userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-            }
-          }
-        }
-      } catch (nameError) {
-        console.error('Leaderboard name lookup failed (continuing with emails/IDs):', nameError)
-      }
-
-      // Helper to get display name: prefer name, then email, then user_id
-      const getDisplayName = (userId: string, chEmail: string): string => {
-        // First try name from Supabase
-        if (userIdToName.has(userId)) return userIdToName.get(userId)!
-        // Then try email
-        if (chEmail) return chEmail
-        return userIdToEmail.get(userId) || userId || 'Unknown'
-      }
+      // === Name Resolution (Zeude Identity SSOT) ===
+      // Shared utility handles Supabase lookup + email fallback + error handling
+      const supabase = createServerClient()
+      const allRows = [...tokenData, ...previousTokenData, ...skillUsersData]
+      const { getDisplayName } = await resolveUserNames(supabase, allRows)
 
       // Format token leaderboard
       const topTokenUsers: LeaderboardUser[] = tokenData.map((row, index) => {
@@ -331,63 +245,84 @@ export async function GET(req: Request) {
         return {
           rank: index + 1,
           userName: getDisplayName(row.user_id, row.user_email),
+          userId: row.user_id,
           value: tokens,
           formattedValue: formatTokens(tokens),
         }
       })
 
-      // Calculate composite efficiency score and format efficiency leaderboard
-      const efficiencyWithScores = efficiencyData.map((row) => {
-        const { efficiencyScore } = calculateEfficiencyScore({
-          retryDensity: row.retry_density || 0.10,
-          growthRate: row.growth_rate || 2.0,
-          outputTokens: parseInt(row.output_tokens) || 0,
-          costUsd: parseFloat(row.cost_usd) || 0,
-          cacheReadTokens: parseInt(row.cache_read_tokens) || 0,
-          requestCount: parseInt(row.total_requests) || 0,
-        })
-
+      const previousTopTokenUsers: LeaderboardUser[] = previousTokenData.map((row, index) => {
+        const tokens = parseInt(row.total_tokens) || 0
         return {
-          user_id: row.user_id,
-          user_email: row.user_email,
-          efficiencyScore,
+          rank: index + 1,
+          userName: getDisplayName(row.user_id, row.user_email),
+          userId: row.user_id,
+          value: tokens,
+          formattedValue: formatTokens(tokens),
         }
       })
 
-      // Sort by efficiency score descending and take top 10
-      efficiencyWithScores.sort((a, b) => b.efficiencyScore - a.efficiencyScore)
-
-      const topEfficiencyUsers: LeaderboardUser[] = efficiencyWithScores.slice(0, 10).map((row, index) => ({
-        rank: index + 1,
-        userName: getDisplayName(row.user_id, row.user_email),
-        value: row.efficiencyScore,
-        formattedValue: `${row.efficiencyScore}점`,
-      }))
-
-      // Format skill users leaderboard
-      const topSkillUsers: SkillLeaderboardUser[] = skillUsersData.map((row, index) => ({
-        rank: index + 1,
-        userName: getDisplayName(row.user_id, row.user_email),
-        skillCount: parseInt(row.skill_count) || 0,
-        topSkill: row.top_skill || '',
-      }))
-
-      // Calculate skill adoption
-      const adoptionRow = skillAdoptionData[0] || { total_users: '0', skill_users: '0' }
-      const totalUsers = parseInt(adoptionRow.total_users) || 0
-      const skillUsers = parseInt(adoptionRow.skill_users) || 0
-      const skillAdoption = {
-        totalUsers,
-        skillUsers,
-        adoptionRate: totalUsers > 0 ? Math.round((skillUsers / totalUsers) * 100) : 0,
+      // Lookup skill descriptions from Supabase
+      const skillDescriptionMap = new Map<string, string>()
+      if (skillData.length > 0) {
+        try {
+          const supabase = createServerClient()
+          const slugs = skillData.map(r => r.skill_name)
+          const { data: skillRows } = await supabase
+            .from('zeude_skills')
+            .select('slug, description')
+            .in('slug', slugs)
+          if (skillRows) {
+            for (const row of skillRows) {
+              if (row.description) skillDescriptionMap.set(row.slug, row.description)
+            }
+          }
+        } catch (descError) {
+          console.error('Leaderboard skill description lookup failed:', descError)
+        }
       }
+
+      // Build per-skill top users map (max 5 names per skill)
+      const skillTopUsersMap = new Map<string, string[]>()
+      for (const row of skillUsersData) {
+        const existing = skillTopUsersMap.get(row.skill_name) || []
+        if (existing.length < 5) {
+          existing.push(getDisplayName(row.user_id, row.user_email))
+          skillTopUsersMap.set(row.skill_name, existing)
+        }
+      }
+
+      const topSkills = skillData.map((row, index) => ({
+        rank: index + 1,
+        skillName: row.skill_name,
+        description: skillDescriptionMap.get(row.skill_name) || '',
+        usageCount: parseInt(row.usage_count) || 0,
+        userCount: parseInt(row.user_count) || 0,
+        topUsers: skillTopUsersMap.get(row.skill_name) || [],
+        formattedValue: `${parseInt(row.usage_count) || 0} calls`,
+      }))
 
       const response: LeaderboardResponse = {
         topTokenUsers,
-        topEfficiencyUsers,
-        topSkillUsers,
-        skillAdoption,
-        period,
+        previousTopTokenUsers,
+        topSkills,
+        weekWindow: {
+          currentStart: new Date(tokenCurrentStartUtcMs).toISOString(),
+          currentEnd: new Date(weekWindow.currentEndUtcMs).toISOString(),
+          previousStart: new Date(cohortFilter ? tokenCurrentStartUtcMs : weekWindow.previousStartUtcMs).toISOString(),
+          previousEnd: new Date(cohortFilter ? tokenCurrentStartUtcMs : weekWindow.previousEndUtcMs).toISOString(),
+          nextReset: new Date(weekWindow.nextResetUtcMs).toISOString(),
+          timezone: 'Asia/Seoul',
+        },
+        cohort: cohortFilter
+          ? {
+            cohortKey: cohortFilter.cohortKey,
+            memberCount: cohortFilter.memberCount,
+            startedAt: new Date(cohortFilter.startedAtUtcMs).toISOString(),
+            skillDayStart: new Date(skillWindow.startUtcMs).toISOString(),
+            skillDayEnd: new Date(skillWindow.endUtcMs).toISOString(),
+          }
+          : undefined,
         updatedAt: new Date().toISOString(),
       }
 
@@ -409,3 +344,234 @@ function formatTokens(tokens: number): string {
   if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`
   return tokens.toString()
 }
+
+interface WeeklyWindow {
+  previousStartEpoch: number
+  currentStartEpoch: number
+  currentEndEpoch: number
+  previousStartUtcMs: number
+  currentStartUtcMs: number
+  currentEndUtcMs: number
+  previousEndUtcMs: number
+  nextResetUtcMs: number
+}
+
+interface CohortFilter {
+  cohortKey: string
+  memberCount: number
+  userIds: string[]
+  userEmails: string[]
+  startedAtEpoch: number
+  startedAtUtcMs: number
+}
+
+interface CohortMemberRow {
+  user_id: string
+  created_at: string
+}
+
+function getWeeklyWindow(nowUtc: Date): WeeklyWindow {
+  const KST_OFFSET_MS = 9 * 60 * 60 * 1000
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const WEEK_MS = 7 * DAY_MS
+
+  const nowUtcMs = nowUtc.getTime()
+  const nowKstMs = nowUtcMs + KST_OFFSET_MS
+  const nowKst = new Date(nowKstMs)
+
+  const dayOfWeek = nowKst.getUTCDay() // 0=Sun, 1=Mon, ... (in KST-shifted clock)
+  const daysSinceMonday = (dayOfWeek + 6) % 7
+  const todayEightKstMs = Date.UTC(
+    nowKst.getUTCFullYear(),
+    nowKst.getUTCMonth(),
+    nowKst.getUTCDate(),
+    8,
+    0,
+    0,
+    0
+  )
+
+  let currentStartKstMs = todayEightKstMs - daysSinceMonday * DAY_MS
+  if (nowKstMs < currentStartKstMs) {
+    currentStartKstMs -= WEEK_MS
+  }
+
+  const previousStartKstMs = currentStartKstMs - WEEK_MS
+  const nextResetKstMs = currentStartKstMs + WEEK_MS
+
+  const previousStartUtcMs = previousStartKstMs - KST_OFFSET_MS
+  const currentStartUtcMs = currentStartKstMs - KST_OFFSET_MS
+  const nextResetUtcMs = nextResetKstMs - KST_OFFSET_MS
+
+  return {
+    previousStartEpoch: Math.floor(previousStartUtcMs / 1000),
+    currentStartEpoch: Math.floor(currentStartUtcMs / 1000),
+    currentEndEpoch: Math.floor(nowUtcMs / 1000),
+    previousStartUtcMs,
+    currentStartUtcMs,
+    currentEndUtcMs: nowUtcMs,
+    previousEndUtcMs: currentStartUtcMs,
+    nextResetUtcMs,
+  }
+}
+
+function sanitizeCohortKey(input: string): string {
+  return input.trim().replace(/[^a-zA-Z0-9._:-]/g, '').slice(0, 64)
+}
+
+function buildCohortWhereClause(idColumn: string, emailColumn: string, filter: CohortFilter | null): string {
+  if (!filter) return ''
+
+  const parts: string[] = []
+  if (filter.userIds.length > 0) {
+    parts.push(`${idColumn} IN (${filter.userIds.map(escapeClickHouseString).join(', ')})`)
+  }
+  if (filter.userEmails.length > 0) {
+    parts.push(`${emailColumn} IN (${filter.userEmails.map(escapeClickHouseString).join(', ')})`)
+  }
+
+  if (parts.length === 0) {
+    return 'AND 1 = 0'
+  }
+
+  return `AND (${parts.join(' OR ')})`
+}
+
+function buildIdOnlyCohortWhereClause(idColumn: string, filter: CohortFilter | null): string {
+  if (!filter) return ''
+  if (filter.userIds.length === 0) return 'AND 1 = 0'
+  return `AND ${idColumn} IN (${filter.userIds.map(escapeClickHouseString).join(', ')})`
+}
+
+function buildEmptyLeaderboardResponse(
+  weekWindow: WeeklyWindow,
+  cohortKey: string,
+  memberCount: number
+): LeaderboardResponse {
+  return {
+    topTokenUsers: [],
+    previousTopTokenUsers: [],
+    topSkills: [],
+    weekWindow: {
+      currentStart: new Date(weekWindow.currentStartUtcMs).toISOString(),
+      currentEnd: new Date(weekWindow.currentEndUtcMs).toISOString(),
+      previousStart: new Date(weekWindow.previousStartUtcMs).toISOString(),
+      previousEnd: new Date(weekWindow.previousEndUtcMs).toISOString(),
+      nextReset: new Date(weekWindow.nextResetUtcMs).toISOString(),
+      timezone: 'Asia/Seoul',
+    },
+    cohort: {
+      cohortKey,
+      memberCount,
+    },
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+async function resolveCohortFilter(
+  cohortKey: string,
+  clickhouse: ReturnType<typeof getClickHouseClient>
+): Promise<CohortFilter> {
+  const supabase = createServerClient()
+
+  const { data: members, error: membersError } = await supabase
+    .from('zeude_cohort_members')
+    .select('user_id, created_at')
+    .eq('cohort_key', cohortKey)
+
+  if (membersError) {
+    console.error('Failed to fetch cohort members:', membersError)
+    return {
+      cohortKey,
+      memberCount: 0,
+      userIds: [],
+      userEmails: [],
+      startedAtEpoch: Math.floor(Date.now() / 1000),
+      startedAtUtcMs: Date.now(),
+    }
+  }
+
+  const memberIds = Array.from(new Set((members || []).map(row => row.user_id).filter(Boolean)))
+  const startedAtUtcMs =
+    ((members || []) as CohortMemberRow[])
+      .map(row => Date.parse(row.created_at || ''))
+      .filter(ts => Number.isFinite(ts))
+      .reduce((min, ts) => (ts < min ? ts : min), Number.POSITIVE_INFINITY)
+
+  const normalizedStartedAtUtcMs =
+    Number.isFinite(startedAtUtcMs) ? startedAtUtcMs : Date.now()
+
+  if (memberIds.length === 0) {
+    return {
+      cohortKey,
+      memberCount: 0,
+      userIds: [],
+      userEmails: [],
+      startedAtEpoch: Math.floor(normalizedStartedAtUtcMs / 1000),
+      startedAtUtcMs: normalizedStartedAtUtcMs,
+    }
+  }
+
+  const { data: users, error: usersError } = await supabase
+    .from('zeude_users')
+    .select('id, email')
+    .in('id', memberIds)
+
+  if (usersError) {
+    console.error('Failed to fetch cohort users:', usersError)
+    return {
+      cohortKey,
+      memberCount: memberIds.length,
+      userIds: [],
+      userEmails: [],
+      startedAtEpoch: Math.floor(normalizedStartedAtUtcMs / 1000),
+      startedAtUtcMs: normalizedStartedAtUtcMs,
+    }
+  }
+
+  const userEmails = Array.from(new Set((users || []).map(row => row.email).filter(Boolean)))
+  // After migration 011, MV user_id = Supabase UUID — use directly, no ClickHouse bridge needed
+  const zeudeIds = Array.from(new Set((users || []).map(row => row.id).filter(Boolean)))
+
+  return {
+    cohortKey,
+    memberCount: memberIds.length,
+    userIds: zeudeIds,
+    userEmails,
+    startedAtEpoch: Math.floor(normalizedStartedAtUtcMs / 1000),
+    startedAtUtcMs: normalizedStartedAtUtcMs,
+  }
+}
+
+function getKstDayWindowFromUtcMs(utcMs: number): {
+  startEpoch: number
+  endEpoch: number
+  startUtcMs: number
+  endUtcMs: number
+} {
+  const KST_OFFSET_MS = 9 * 60 * 60 * 1000
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const kstMs = utcMs + KST_OFFSET_MS
+  const kstDate = new Date(kstMs)
+
+  const kstDayStartMs = Date.UTC(
+    kstDate.getUTCFullYear(),
+    kstDate.getUTCMonth(),
+    kstDate.getUTCDate(),
+    0,
+    0,
+    0,
+    0
+  )
+
+  const startUtcMs = kstDayStartMs - KST_OFFSET_MS
+  const endUtcMs = startUtcMs + DAY_MS
+
+  return {
+    startEpoch: Math.floor(startUtcMs / 1000),
+    endEpoch: Math.floor(endUtcMs / 1000),
+    startUtcMs,
+    endUtcMs,
+  }
+}
+

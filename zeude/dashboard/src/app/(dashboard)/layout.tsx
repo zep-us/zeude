@@ -48,7 +48,9 @@ export default async function DashboardLayout({
 
       {/* Main content */}
       <main className="flex-1 p-8 overflow-auto">
-        {children}
+        <div className="animate-fade-in-up">
+          {children}
+        </div>
       </main>
 
       {/* Floating AI Chatbot */}

@@ -1,4 +1,4 @@
-import { requireAdmin } from '@/lib/session'
+import { requireAuth } from '@/lib/session'
 import { AdminNav } from '@/components/admin/nav'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Separator } from '@/components/ui/separator'
@@ -8,8 +8,9 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode
 }) {
-  const session = await requireAdmin()
+  const session = await requireAuth()
   const user = session.user
+  const isAdmin = user.role === 'admin'
   const initials = user.name
     ? user.name.split(' ').map(n => n[0]).join('').toUpperCase()
     : user.email[0].toUpperCase()
@@ -23,7 +24,7 @@ export default async function AdminLayout({
           <span className="text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded">Admin</span>
         </div>
 
-        <AdminNav />
+        <AdminNav isAdmin={isAdmin} />
 
         <div className="mt-auto pt-4">
           <Separator className="mb-4" />
@@ -47,7 +48,9 @@ export default async function AdminLayout({
 
       {/* Main content */}
       <main className="flex-1 p-8 overflow-auto">
-        {children}
+        <div className="animate-fade-in-up">
+          {children}
+        </div>
       </main>
     </div>
   )

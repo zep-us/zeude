@@ -128,7 +128,9 @@ export function getPresetById(id: string): MCPPreset | undefined {
 
 // Helper to parse claude.json MCP server config
 export interface ClaudeJsonMCPServer {
-  command: string
+  type?: string
+  url?: string
+  command?: string
   args?: string[]
   env?: Record<string, string>
 }
@@ -137,28 +139,37 @@ export interface ClaudeJsonConfig {
   mcpServers?: Record<string, ClaudeJsonMCPServer>
 }
 
+function isValidMCPConfig(value: unknown): value is ClaudeJsonMCPServer {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  return 'command' in v || 'url' in v
+}
+
 export function parseClaudeJson(jsonStr: string): { servers: { name: string; config: ClaudeJsonMCPServer }[]; error?: string } {
   try {
     const parsed = JSON.parse(jsonStr)
 
     // Handle full claude.json format
     if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
-      const servers = Object.entries(parsed.mcpServers).map(([name, config]) => ({
-        name,
-        config: config as ClaudeJsonMCPServer,
-      }))
+      const servers = Object.entries(parsed.mcpServers)
+        .filter(([, config]) => isValidMCPConfig(config))
+        .map(([name, config]) => ({
+          name,
+          config: config as ClaudeJsonMCPServer,
+        }))
       return { servers }
     }
 
     // Handle just the mcpServers object directly
     if (typeof parsed === 'object' && !Array.isArray(parsed)) {
-      // Check if it looks like an MCP server config (has command property)
-      const firstValue = Object.values(parsed)[0] as Record<string, unknown> | undefined
-      if (firstValue && typeof firstValue === 'object' && 'command' in firstValue) {
-        const servers = Object.entries(parsed).map(([name, config]) => ({
-          name,
-          config: config as ClaudeJsonMCPServer,
-        }))
+      const firstValue = Object.values(parsed)[0]
+      if (isValidMCPConfig(firstValue)) {
+        const servers = Object.entries(parsed)
+          .filter(([, config]) => isValidMCPConfig(config))
+          .map(([name, config]) => ({
+            name,
+            config: config as ClaudeJsonMCPServer,
+          }))
         return { servers }
       }
     }

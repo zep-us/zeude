@@ -1,17 +1,33 @@
+import dynamic from 'next/dynamic'
 import { getUser } from '@/lib/session'
-import { getDailyStats } from '@/lib/clickhouse'
+import { getDailyStats, parseSourceParam } from '@/lib/clickhouse'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { CostChart } from '@/components/charts/cost-chart'
-import { TokenChart } from '@/components/charts/token-chart'
+import { SourceFilter as SourceFilterComponent } from '@/components/dashboard/source-filter'
 
-export default async function DailyPage() {
+const CostChart = dynamic(
+  () => import('@/components/charts/cost-chart').then(m => ({ default: m.CostChart })),
+  { loading: () => <div className="h-[300px] bg-muted animate-pulse rounded-lg" /> }
+)
+
+const TokenChart = dynamic(
+  () => import('@/components/charts/token-chart').then(m => ({ default: m.TokenChart })),
+  { loading: () => <div className="h-[300px] bg-muted animate-pulse rounded-lg" /> }
+)
+
+interface DailyPageProps {
+  searchParams: Promise<{ source?: string }>
+}
+
+export default async function DailyPage({ searchParams }: DailyPageProps) {
   const user = await getUser()
+  const params = await searchParams
+  const source = parseSourceParam(params.source ?? null)
 
   let stats: Awaited<ReturnType<typeof getDailyStats>> = []
 
   try {
-    stats = await getDailyStats(user.email, user.id, 30)
+    stats = await getDailyStats(user.email, user.id, 30, source)
   } catch (error) {
     console.error('Failed to fetch daily stats:', error)
   }
@@ -27,17 +43,24 @@ export default async function DailyPage() {
     { sessions: 0, cost: 0, input_tokens: 0, output_tokens: 0 }
   )
 
+  // Pre-process chart data server-side to minimize serialization payload
+  const costData = stats.map(d => ({ date: d.date, cost: Number(d.cost) }))
+  const tokenData = stats.map(d => ({ date: d.date, input: Number(d.input_tokens), output: Number(d.output_tokens) }))
+
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold">Daily Statistics</h1>
-        <p className="text-muted-foreground">
-          Usage trends over the last 30 days
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Daily Statistics</h1>
+          <p className="text-muted-foreground">
+            Usage trends over the last 30 days
+          </p>
+        </div>
+        <SourceFilterComponent useSearchParams />
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-4 stagger-children">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">30-Day Sessions</CardTitle>
@@ -74,8 +97,8 @@ export default async function DailyPage() {
 
       {/* Charts */}
       <div className="grid gap-6 md:grid-cols-2">
-        <CostChart data={stats} />
-        <TokenChart data={stats} />
+        <CostChart data={costData} />
+        <TokenChart data={tokenData} />
       </div>
 
       {/* Daily Breakdown Table */}
@@ -87,7 +110,7 @@ export default async function DailyPage() {
         <CardContent>
           {stats.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No usage data available. Start using Claude Code to see your daily stats.
+              No usage data available. Start using Claude Code or Codex to see your daily stats.
             </div>
           ) : (
             <Table>

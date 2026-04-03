@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/session'
-import { getClickHouseClient } from '@/lib/clickhouse'
+import { getClickHouseClient, buildMVSourceCondition, parseSourceParam } from '@/lib/clickhouse'
 
 interface ContextGrowthPoint {
   date: string
@@ -42,6 +42,10 @@ export async function GET(
     }
 
     const { userId } = await params
+    const { searchParams } = new URL(request.url)
+    const source = parseSourceParam(searchParams.get('source'))
+    const sourceFilter = buildMVSourceCondition(source)
+
     const clickhouse = getClickHouseClient()
 
     if (!clickhouse) {
@@ -61,6 +65,7 @@ export async function GET(
           FROM context_growth_analysis
           WHERE user_id = {userId:String}
             AND date >= today() - INTERVAL 30 DAY
+            ${sourceFilter}
           GROUP BY date
           ORDER BY date
         `,
@@ -86,6 +91,7 @@ export async function GET(
           WHERE user_id = {userId:String}
             AND hour >= toStartOfHour(now() - INTERVAL 30 DAY)
             AND mcp_server != ''
+            ${sourceFilter}
           GROUP BY mcp_server
           ORDER BY requests DESC
           LIMIT 10
@@ -110,6 +116,7 @@ export async function GET(
           FROM context_growth_analysis
           WHERE user_id = {userId:String}
             AND date >= today() - INTERVAL 30 DAY
+            ${sourceFilter}
         `,
         query_params: { userId },
         format: 'JSONEachRow',

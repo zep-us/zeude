@@ -3,19 +3,23 @@
 import { useState, useCallback } from 'react'
 import type { MCPServer } from '@/lib/database.types'
 import type { MCPPreset } from '@/lib/mcp-presets'
+import { useMCPServers, useSaveMCP, useDeleteMCP, useTestMCP } from '@/hooks/use-mcp'
 import {
   type MCPFormData,
-  type InstallStatusSummary,
   type RegistrationMode,
   type TestResult,
   defaultFormData,
 } from './types'
 
 export function useMCPState() {
-  const [servers, setServers] = useState<MCPServer[]>([])
-  const [teams, setTeams] = useState<string[]>([])
-  const [installStatus, setInstallStatus] = useState<Record<string, InstallStatusSummary>>({})
-  const [loading, setLoading] = useState(true)
+  const { data, isLoading: loading, isError, refetch } = useMCPServers()
+  const saveMutation = useSaveMCP()
+  const deleteMutation = useDeleteMCP()
+  const testMutation = useTestMCP()
+
+  const servers = data?.servers ?? []
+  const teams = data?.teams ?? []
+  const installStatus = data?.installStatus ?? {}
 
   // Create/Edit dialog state
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -24,7 +28,6 @@ export function useMCPState() {
   const [step, setStep] = useState(1)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formData, setFormData] = useState<MCPFormData>(defaultFormData)
-  const [saving, setSaving] = useState(false)
 
   // Preset selection
   const [selectedPreset, setSelectedPreset] = useState<MCPPreset | null>(null)
@@ -32,16 +35,14 @@ export function useMCPState() {
   // JSON import
   const [jsonInput, setJsonInput] = useState('')
   const [jsonError, setJsonError] = useState<string | null>(null)
-  const [parsedServers, setParsedServers] = useState<{ name: string; config: { command: string; args?: string[]; env?: Record<string, string> } }[]>([])
+  const [parsedServers, setParsedServers] = useState<{ name: string; config: { url?: string; command?: string; args?: string[]; env?: Record<string, string> } }[]>([])
 
   // Connection test state
-  const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
   // Delete dialog
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deletingServer, setDeletingServer] = useState<MCPServer | null>(null)
-  const [deleting, setDeleting] = useState(false)
 
   // Install status dialog
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
@@ -49,23 +50,6 @@ export function useMCPState() {
 
   // Copy state
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null)
-
-  const fetchServers = useCallback(async () => {
-    try {
-      const res = await fetch('/api/admin/mcp')
-      const data = await res.json()
-
-      if (res.ok) {
-        setServers(data.servers)
-        setTeams(data.teams)
-        setInstallStatus(data.installStatus || {})
-      }
-    } catch (error) {
-      console.error('Failed to fetch MCP servers:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
 
   const resetDialogState = useCallback(() => {
     setFormData(defaultFormData)
@@ -90,6 +74,7 @@ export function useMCPState() {
     setEditingId(server.id)
     setFormData({
       name: server.name,
+      url: server.url || '',
       command: server.command,
       args: server.args,
       env: server.env,
@@ -104,84 +89,59 @@ export function useMCPState() {
   }, [])
 
   const handleSave = useCallback(async () => {
-    if (!formData.name || !formData.command) return
+    const hasUrl = formData.url.trim() !== ''
+    const hasCommand = formData.command.trim() !== ''
+    if (!formData.name || (!hasUrl && !hasCommand)) return
 
-    setSaving(true)
     try {
-      const url = dialogMode === 'create' ? '/api/admin/mcp' : `/api/admin/mcp/${editingId}`
-      const method = dialogMode === 'create' ? 'POST' : 'PATCH'
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await saveMutation.mutateAsync({
+        id: dialogMode === 'edit' ? editingId : null,
+        data: {
           name: formData.name,
-          command: formData.command,
-          args: formData.args,
-          env: formData.env,
+          url: hasUrl ? formData.url : null,
+          command: hasCommand ? formData.command : null,
+          args: hasUrl ? [] : formData.args,
+          env: hasUrl ? {} : formData.env,
           teams: formData.teams,
           is_global: formData.isGlobal,
-        }),
+        },
       })
-
-      if (res.ok) {
-        setDialogOpen(false)
-        fetchServers()
-      }
+      setDialogOpen(false)
     } catch (error) {
       console.error('Failed to save MCP server:', error)
-    } finally {
-      setSaving(false)
     }
-  }, [dialogMode, editingId, formData, fetchServers])
+  }, [dialogMode, editingId, formData, saveMutation])
 
   const handleDelete = useCallback(async () => {
     if (!deletingServer) return
 
-    setDeleting(true)
     try {
-      const res = await fetch(`/api/admin/mcp/${deletingServer.id}`, {
-        method: 'DELETE',
-      })
-
-      if (res.ok) {
-        setDeleteOpen(false)
-        fetchServers()
-      }
+      await deleteMutation.mutateAsync(deletingServer.id)
+      setDeleteOpen(false)
     } catch (error) {
       console.error('Failed to delete MCP server:', error)
-    } finally {
-      setDeleting(false)
     }
-  }, [deletingServer, fetchServers])
+  }, [deletingServer, deleteMutation])
 
   const handleTest = useCallback(async () => {
-    setTesting(true)
     setTestResult(null)
 
     try {
-      const res = await fetch('/api/admin/mcp/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          command: formData.command,
-          args: formData.args,
-          env: formData.env,
-        }),
+      const result = await testMutation.mutateAsync({
+        url: formData.url || undefined,
+        command: formData.command || undefined,
+        args: formData.args,
+        env: formData.env,
       })
-
-      const data = await res.json()
-      setTestResult(data)
+      setTestResult(result)
     } catch (error) {
       setTestResult({
         success: false,
         message: 'Failed to test connection',
         details: error instanceof Error ? error.message : 'Unknown error',
       })
-    } finally {
-      setTesting(false)
     }
-  }, [formData])
+  }, [formData, testMutation])
 
   return {
     // Data
@@ -189,6 +149,8 @@ export function useMCPState() {
     teams,
     installStatus,
     loading,
+    isError,
+    refetch,
 
     // Dialog state
     dialogOpen,
@@ -201,7 +163,7 @@ export function useMCPState() {
     editingId,
     formData,
     setFormData,
-    saving,
+    saving: saveMutation.isPending,
     selectedPreset,
     setSelectedPreset,
 
@@ -214,7 +176,7 @@ export function useMCPState() {
     setParsedServers,
 
     // Test
-    testing,
+    testing: testMutation.isPending,
     testResult,
     setTestResult,
 
@@ -223,7 +185,7 @@ export function useMCPState() {
     setDeleteOpen,
     deletingServer,
     setDeletingServer,
-    deleting,
+    deleting: deleteMutation.isPending,
 
     // Status dialog
     statusDialogOpen,
@@ -236,7 +198,6 @@ export function useMCPState() {
     setCopiedCommand,
 
     // Actions
-    fetchServers,
     openCreateDialog,
     openEditDialog,
     handleSave,

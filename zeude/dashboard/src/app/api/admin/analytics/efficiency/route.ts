@@ -1,7 +1,8 @@
 import { getSession } from '@/lib/session'
-import { getClickHouseClient } from '@/lib/clickhouse'
+import { getClickHouseClient, buildMVSourceCondition, parseSourceParam } from '@/lib/clickhouse'
 import { createServerClient } from '@/lib/supabase'
 import { calculateEfficiencyScore } from '@/lib/efficiency'
+import { resolveUserNames } from '@/lib/name-resolution'
 
 interface UserEfficiency {
   userId: string
@@ -44,7 +45,7 @@ const THRESHOLDS = {
 }
 
 // GET: Fetch efficiency metrics
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getSession()
 
@@ -55,6 +56,10 @@ export async function GET() {
     if (session.user.role !== 'admin') {
       return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
+
+    const { searchParams } = new URL(req.url)
+    const source = parseSourceParam(searchParams.get('source'))
+    const sourceFilter = buildMVSourceCondition(source)
 
     // Try to query ClickHouse
     const clickhouse = getClickHouseClient()
@@ -94,18 +99,21 @@ export async function GET() {
               sum(input_tokens) as input_tokens
             FROM token_usage_hourly
             WHERE hour >= now() - INTERVAL 7 DAY
+              ${sourceFilter}
             GROUP BY user_id
           ) t
           LEFT JOIN (
             SELECT user_id, avg(retry_density) as avg_retry_density
             FROM retry_analysis
             WHERE date >= today() - 7
+              ${sourceFilter}
             GROUP BY user_id
           ) r ON t.user_id = r.user_id
           LEFT JOIN (
             SELECT user_id, avg(growth_rate) as avg_growth_rate
             FROM context_growth_analysis
             WHERE date >= today() - 7
+              ${sourceFilter}
             GROUP BY user_id
           ) c ON t.user_id = c.user_id
         `,
@@ -113,121 +121,10 @@ export async function GET() {
       })
       const userData = (await result.json()) as UnifiedUserData[]
 
-      // Build email and name lookup maps from query results and fallback sources
-      const userIds = userData.map(row => row.user_id).filter(Boolean)
-      const userIdToEmail = new Map<string, string>()
-      const userIdToZeudeId = new Map<string, string>()
-      const userIdToName = new Map<string, string>()
-
-      // First, use emails from the unified query
-      for (const row of userData) {
-        if (row.user_email && row.user_id) {
-          userIdToEmail.set(row.user_id, row.user_email)
-        }
-      }
-
-      // Lookup zeude.user.id and missing emails from claude_code_logs
-      // Use GROUP BY with argMax to get deterministic 1:1 mapping per user_id
-      if (userIds.length > 0) {
-        const userIdList = userIds.map(id => `'${id}'`).join(',')
-        const lookupResult = await clickhouse.query({
-          query: `
-            SELECT
-              LogAttributes['user.id'] as user_id,
-              argMax(LogAttributes['user.email'], Timestamp) as user_email,
-              argMax(ResourceAttributes['zeude.user.id'], Timestamp) as zeude_user_id,
-              argMax(ResourceAttributes['zeude.user.email'], Timestamp) as zeude_user_email
-            FROM claude_code_logs
-            WHERE LogAttributes['user.id'] IN (${userIdList})
-            GROUP BY user_id
-          `,
-          format: 'JSONEachRow',
-        })
-        const lookupData = await lookupResult.json() as { user_id: string; user_email: string; zeude_user_id: string; zeude_user_email: string }[]
-        for (const row of lookupData) {
-          // Map zeude.user.id for Supabase lookup
-          if (row.zeude_user_id) {
-            userIdToZeudeId.set(row.user_id, row.zeude_user_id)
-          }
-          // Priority: user.email > zeude.user.email
-          if (row.user_email) {
-            userIdToEmail.set(row.user_id, row.user_email)
-          } else if (row.zeude_user_email) {
-            userIdToEmail.set(row.user_id, row.zeude_user_email)
-          }
-        }
-      }
-
-      // Collect all emails and zeude_ids for Supabase name lookup
-      const allZeudeIds = new Set<string>(userIdToZeudeId.values())
-      const allEmails = new Set<string>()
-      for (const row of userData) {
-        if (row.user_email) allEmails.add(row.user_email)
-      }
-      for (const email of userIdToEmail.values()) {
-        allEmails.add(email)
-      }
-
-      // Query Supabase for names
-      if (allZeudeIds.size > 0 || allEmails.size > 0) {
-        const supabase = createServerClient()
-        const zeudeIdToName = new Map<string, string>()
-        const emailToName = new Map<string, string>()
-
-        // Query by zeude_id (Supabase UUID)
-        if (allZeudeIds.size > 0) {
-          const { data: usersByZeudeId } = await supabase
-            .from('zeude_users')
-            .select('id, name, email')
-            .in('id', Array.from(allZeudeIds))
-
-          if (usersByZeudeId) {
-            for (const user of usersByZeudeId) {
-              if (user.name) {
-                zeudeIdToName.set(user.id, user.name)
-                if (user.email) emailToName.set(user.email, user.name)
-              }
-            }
-          }
-        }
-
-        // Query by email
-        if (allEmails.size > 0) {
-          const { data: usersByEmail } = await supabase
-            .from('zeude_users')
-            .select('id, name, email')
-            .in('email', Array.from(allEmails))
-
-          if (usersByEmail) {
-            for (const user of usersByEmail) {
-              if (user.name) {
-                if (!zeudeIdToName.has(user.id)) zeudeIdToName.set(user.id, user.name)
-                if (user.email && !emailToName.has(user.email)) emailToName.set(user.email, user.name)
-              }
-            }
-          }
-        }
-
-        // Map zeude_id -> name back to ClickHouse user_id
-        for (const [userId, zeudeId] of userIdToZeudeId) {
-          if (zeudeIdToName.has(zeudeId)) {
-            userIdToName.set(userId, zeudeIdToName.get(zeudeId)!)
-          }
-        }
-        // Also map by email
-        for (const row of userData) {
-          if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-            userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-          }
-        }
-      }
-
-      // Helper to get display name: prefer name, then email, then user_id
-      const getDisplayName = (userId: string, email: string | null): string => {
-        if (userIdToName.has(userId)) return userIdToName.get(userId)!
-        if (email) return email
-        return userIdToEmail.get(userId) || 'Unknown'
-      }
+      // === Name Resolution (Zeude Identity SSOT) ===
+      // Shared utility handles Supabase lookup + email fallback + error handling
+      const supabase = createServerClient()
+      const { getDisplayName } = await resolveUserNames(supabase, userData)
 
       const byUser: UserEfficiency[] = userData.map(row => {
         const inputTokens = parseInt(row.input_tokens) || 0

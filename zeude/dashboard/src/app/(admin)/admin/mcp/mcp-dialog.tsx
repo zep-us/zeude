@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Check, Loader2, AlertCircle, FileJson, Grid3X3, PenLine, Zap } from 'lucide-react'
+import { Check, Loader2, AlertCircle, FileJson, Grid3X3, PenLine, Zap, Globe } from 'lucide-react'
 import { MCP_PRESETS, parseClaudeJson, type MCPPreset } from '@/lib/mcp-presets'
 import type { MCPFormData, RegistrationMode, TestResult } from './types'
 
@@ -38,8 +38,8 @@ interface MCPDialogProps {
   setJsonInput: (input: string) => void
   jsonError: string | null
   setJsonError: (error: string | null) => void
-  parsedServers: { name: string; config: { command: string; args?: string[]; env?: Record<string, string> } }[]
-  setParsedServers: (servers: { name: string; config: { command: string; args?: string[]; env?: Record<string, string> } }[]) => void
+  parsedServers: { name: string; config: { url?: string; command?: string; args?: string[]; env?: Record<string, string> } }[]
+  setParsedServers: (servers: { name: string; config: { url?: string; command?: string; args?: string[]; env?: Record<string, string> } }[]) => void
 }
 
 export function MCPDialog({
@@ -75,6 +75,7 @@ export function MCPDialog({
     setSelectedPreset(preset)
     setFormData({
       name: preset.name,
+      url: '',
       command: preset.command,
       args: [...preset.args],
       env: { ...preset.env },
@@ -104,7 +105,8 @@ export function MCPDialog({
       const server = result.servers[0]
       setFormData({
         name: server.name,
-        command: server.config.command,
+        url: server.config.url || '',
+        command: server.config.command || '',
         args: server.config.args || [],
         env: server.config.env || {},
         teams: [],
@@ -114,10 +116,11 @@ export function MCPDialog({
     }
   }
 
-  function selectParsedServer(server: { name: string; config: { command: string; args?: string[]; env?: Record<string, string> } }) {
+  function selectParsedServer(server: { name: string; config: { url?: string; command?: string; args?: string[]; env?: Record<string, string> } }) {
     setFormData({
       name: server.name,
-      command: server.config.command,
+      url: server.config.url || '',
+      command: server.config.command || '',
       args: server.config.args || [],
       env: server.config.env || {},
       teams: [],
@@ -165,7 +168,7 @@ export function MCPDialog({
   function renderStep1() {
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => setRegistrationMode('preset')}
             className={`p-4 rounded-lg border-2 text-left transition-colors ${registrationMode === 'preset' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}
@@ -181,6 +184,14 @@ export function MCPDialog({
             <FileJson className="h-5 w-5 mb-2" />
             <div className="font-medium text-sm">Import JSON</div>
             <div className="text-xs text-muted-foreground">Paste claude.json</div>
+          </button>
+          <button
+            onClick={() => { setRegistrationMode('url'); setStep(2) }}
+            className={`p-4 rounded-lg border-2 text-left transition-colors ${registrationMode === 'url' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}
+          >
+            <Globe className="h-5 w-5 mb-2" />
+            <div className="font-medium text-sm">URL</div>
+            <div className="text-xs text-muted-foreground">Remote MCP server</div>
           </button>
           <button
             onClick={() => { setRegistrationMode('manual'); setStep(2) }}
@@ -234,7 +245,7 @@ export function MCPDialog({
                     className="w-full p-2 text-left border rounded-lg hover:bg-muted"
                   >
                     <div className="font-medium text-sm">{server.name}</div>
-                    <div className="text-xs text-muted-foreground font-mono">{server.config.command}</div>
+                    <div className="text-xs text-muted-foreground font-mono">{server.config.url || server.config.command}</div>
                   </button>
                 ))}
               </div>
@@ -268,17 +279,30 @@ export function MCPDialog({
           />
         </div>
 
-        <div>
-          <label className="text-sm font-medium">Command</label>
-          <Input
-            value={formData.command}
-            onChange={(e) => setFormData({ ...formData, command: e.target.value })}
-            placeholder="e.g., npx"
-            className="font-mono"
-          />
-        </div>
+        {(registrationMode === 'url' || formData.url) ? (
+          <div>
+            <label className="text-sm font-medium">URL</label>
+            <Input
+              value={formData.url}
+              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+              placeholder="https://mcp.example.com/server/mcp"
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground mt-1">Remote MCP server endpoint (StreamableHTTP)</p>
+          </div>
+        ) : (
+          <div>
+            <label className="text-sm font-medium">Command</label>
+            <Input
+              value={formData.command}
+              onChange={(e) => setFormData({ ...formData, command: e.target.value })}
+              placeholder="e.g., npx"
+              className="font-mono"
+            />
+          </div>
+        )}
 
-        <div>
+        {!(registrationMode === 'url' || formData.url) && <div>
           <label className="text-sm font-medium">Arguments</label>
           <div className="flex gap-2 mb-2">
             <Input
@@ -300,9 +324,9 @@ export function MCPDialog({
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
-        <div>
+        {!(registrationMode === 'url' || formData.url) && <div>
           <label className="text-sm font-medium">Environment Variables</label>
           {selectedPreset?.envPlaceholders && Object.keys(selectedPreset.envPlaceholders).length > 0 && (
             <div className="text-xs text-muted-foreground mb-2">
@@ -335,7 +359,7 @@ export function MCPDialog({
               ))}
             </div>
           )}
-        </div>
+        </div>}
       </div>
     )
   }
@@ -380,7 +404,7 @@ export function MCPDialog({
               variant="outline"
               size="sm"
               onClick={onTest}
-              disabled={testing || !formData.command}
+              disabled={testing || (!formData.command && !formData.url)}
             >
               {testing ? (
                 <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Testing...</>
@@ -463,12 +487,12 @@ export function MCPDialog({
           {mode === 'create' && step < 3 ? (
             <Button
               onClick={() => setStep(step + 1)}
-              disabled={step === 2 && (!formData.name || !formData.command)}
+              disabled={step === 2 && (!formData.name || (!formData.command && !formData.url))}
             >
               Next
             </Button>
           ) : (
-            <Button onClick={onSave} disabled={!formData.name || !formData.command || saving}>
+            <Button onClick={onSave} disabled={!formData.name || (!formData.command && !formData.url) || saving}>
               {saving ? 'Saving...' : 'Save'}
             </Button>
           )}

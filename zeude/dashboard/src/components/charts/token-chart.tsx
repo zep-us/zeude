@@ -1,20 +1,23 @@
 'use client'
 
+import { memo, useMemo } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import type { DailyStats } from '@/lib/clickhouse'
 
 interface TokenChartProps {
-  data: DailyStats[]
+  data: { date: string; input: number; output: number }[]
 }
 
-export function TokenChart({ data }: TokenChartProps) {
-  // Reverse data so oldest is first (left side of chart)
-  const chartData = [...data].reverse().map((d) => ({
-    date: new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    input: Number(d.input_tokens),
-    output: Number(d.output_tokens),
-  }))
+export const TokenChart = memo(function TokenChart({ data }: TokenChartProps) {
+  const chartData = useMemo(
+    () =>
+      [...data].reverse().map((d) => ({
+        date: new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        input: d.input,
+        output: d.output,
+      })),
+    [data]
+  )
 
   return (
     <Card>
@@ -70,4 +73,4 @@ export function TokenChart({ data }: TokenChartProps) {
       </CardContent>
     </Card>
   )
-}
+})

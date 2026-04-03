@@ -1,6 +1,14 @@
 import { getClickHouseClient } from './clickhouse'
 import { unstable_cache } from 'next/cache'
 
+// Build source filter clause for ai_prompts queries
+// source column values: 'claude' (Claude Code), 'codex' (OpenAI Codex)
+function buildSourceFilter(source: string): string {
+  if (source === 'claude') return "AND source = 'claude'"
+  if (source === 'codex') return "AND source = 'codex'"
+  return '' // 'all' = no filter
+}
+
 export interface PromptRecord {
   prompt_id: string
   session_id: string
@@ -62,12 +70,14 @@ function buildUserWhereClause(identifier: UserIdentifier): { clause: string; par
 // Get recent prompts for a user
 async function _getUserPrompts(
   identifier: UserIdentifier,
-  limit: number = 50
+  limit: number = 50,
+  source: string = 'all'
 ): Promise<PromptRecord[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
   const { clause, params } = buildUserWhereClause(identifier)
+  const sourceFilter = buildSourceFilter(source)
 
   const result = await clickhouse.query({
     query: `
@@ -83,6 +93,7 @@ async function _getUserPrompts(
         project_path
       FROM ai_prompts
       WHERE ${clause}
+        ${sourceFilter}
       ORDER BY timestamp DESC
       LIMIT {limit:UInt32}
     `,
@@ -92,11 +103,10 @@ async function _getUserPrompts(
   return result.json()
 }
 
-export const getUserPrompts = unstable_cache(
-  _getUserPrompts,
-  ['user-prompts'],
-  { revalidate: 30 }
-)
+export function getUserPrompts(identifier: UserIdentifier, limit: number = 50, source: string = 'all'): Promise<PromptRecord[]> {
+  const cacheKey = ['user-prompts', identifier.userId ?? '', identifier.userEmail ?? '', String(limit), source]
+  return unstable_cache(_getUserPrompts, cacheKey, { revalidate: 30 })(identifier, limit, source)
+}
 
 // Legacy wrapper for backwards compatibility (accepts email string)
 export async function getUserPromptsByEmail(
@@ -109,7 +119,8 @@ export async function getUserPromptsByEmail(
 // Get user prompt statistics
 async function _getUserPromptStats(
   identifier: UserIdentifier,
-  days: number = 30
+  days: number = 30,
+  source: string = 'all'
 ): Promise<PromptStats> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) {
@@ -122,6 +133,7 @@ async function _getUserPromptStats(
   }
 
   const { clause, params } = buildUserWhereClause(identifier)
+  const sourceFilter = buildSourceFilter(source)
 
   const statsResult = await clickhouse.query({
     query: `
@@ -137,6 +149,7 @@ async function _getUserPromptStats(
         FROM ai_prompts
         WHERE ${clause}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
     `,
@@ -161,6 +174,7 @@ async function _getUserPromptStats(
         FROM ai_prompts
         WHERE ${clause}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
       WHERE project_path != ''
@@ -181,11 +195,10 @@ async function _getUserPromptStats(
   }
 }
 
-export const getUserPromptStats = unstable_cache(
-  _getUserPromptStats,
-  ['user-prompt-stats'],
-  { revalidate: 60 }
-)
+export function getUserPromptStats(identifier: UserIdentifier, days: number = 30, source: string = 'all'): Promise<PromptStats> {
+  const cacheKey = ['user-prompt-stats', identifier.userId ?? '', identifier.userEmail ?? '', String(days), source]
+  return unstable_cache(_getUserPromptStats, cacheKey, { revalidate: 60 })(identifier, days, source)
+}
 
 // Legacy wrapper for backwards compatibility
 export async function getUserPromptStatsByEmail(
@@ -198,11 +211,13 @@ export async function getUserPromptStatsByEmail(
 // Get team prompt trends
 async function _getTeamTrends(
   team: string,
-  days: number = 14
+  days: number = 14,
+  source: string = 'all'
 ): Promise<TeamTrend[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
+  const sourceFilter = buildSourceFilter(source)
   const result = await clickhouse.query({
     query: `
       SELECT
@@ -213,6 +228,7 @@ async function _getTeamTrends(
       FROM ai_prompts
       WHERE team = {team:String}
         AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+        ${sourceFilter}
       GROUP BY date
       ORDER BY date DESC
     `,
@@ -222,20 +238,21 @@ async function _getTeamTrends(
   return result.json()
 }
 
-export const getTeamTrends = unstable_cache(
-  _getTeamTrends,
-  ['team-trends'],
-  { revalidate: 60 }
-)
+export function getTeamTrends(team: string, days: number = 14, source: string = 'all'): Promise<TeamTrend[]> {
+  const cacheKey = ['team-trends', team, String(days), source]
+  return unstable_cache(_getTeamTrends, cacheKey, { revalidate: 60 })(team, days, source)
+}
 
 // Get team's top prompt patterns (for AI coaching)
 async function _getTeamPromptPatterns(
   team: string,
-  limit: number = 100
+  limit: number = 100,
+  source: string = 'all'
 ): Promise<PromptRecord[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
+  const sourceFilter = buildSourceFilter(source)
   const result = await clickhouse.query({
     query: `
       SELECT
@@ -251,6 +268,7 @@ async function _getTeamPromptPatterns(
       FROM ai_prompts
       WHERE team = {team:String}
         AND timestamp >= now() - INTERVAL 7 DAY
+        ${sourceFilter}
       ORDER BY timestamp DESC
       LIMIT {limit:UInt32}
     `,
@@ -260,22 +278,23 @@ async function _getTeamPromptPatterns(
   return result.json()
 }
 
-export const getTeamPromptPatterns = unstable_cache(
-  _getTeamPromptPatterns,
-  ['team-prompt-patterns'],
-  { revalidate: 120 }
-)
+export function getTeamPromptPatterns(team: string, limit: number = 100, source: string = 'all'): Promise<PromptRecord[]> {
+  const cacheKey = ['team-prompt-patterns', team, String(limit), source]
+  return unstable_cache(_getTeamPromptPatterns, cacheKey, { revalidate: 120 })(team, limit, source)
+}
 
 // Search prompts by keyword
 export async function searchPrompts(
   identifier: UserIdentifier,
   keyword: string,
-  limit: number = 20
+  limit: number = 20,
+  source: string = 'all'
 ): Promise<PromptRecord[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
   const { clause, params } = buildUserWhereClause(identifier)
+  const sourceFilter = buildSourceFilter(source)
 
   const result = await clickhouse.query({
     query: `
@@ -292,6 +311,7 @@ export async function searchPrompts(
       FROM ai_prompts
       WHERE ${clause}
         AND prompt_text ILIKE {pattern:String}
+        ${sourceFilter}
       ORDER BY timestamp DESC
       LIMIT {limit:UInt32}
     `,
@@ -333,12 +353,14 @@ export interface SkillUsageTrend {
 // Get prompt type distribution for a user
 async function _getUserPromptTypeStats(
   identifier: UserIdentifier,
-  days: number = 30
+  days: number = 30,
+  source: string = 'all'
 ): Promise<PromptTypeStats[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
   const { clause, params } = buildUserWhereClause(identifier)
+  const sourceFilter = buildSourceFilter(source)
 
   const result = await clickhouse.query({
     query: `
@@ -352,6 +374,7 @@ async function _getUserPromptTypeStats(
         FROM ai_prompts
         WHERE ${clause}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
       GROUP BY prompt_type
@@ -371,22 +394,23 @@ async function _getUserPromptTypeStats(
   }))
 }
 
-export const getUserPromptTypeStats = unstable_cache(
-  _getUserPromptTypeStats,
-  ['user-prompt-type-stats'],
-  { revalidate: 60 }
-)
+export function getUserPromptTypeStats(identifier: UserIdentifier, days: number = 30, source: string = 'all'): Promise<PromptTypeStats[]> {
+  const cacheKey = ['user-prompt-type-stats', identifier.userId ?? '', identifier.userEmail ?? '', String(days), source]
+  return unstable_cache(_getUserPromptTypeStats, cacheKey, { revalidate: 60 })(identifier, days, source)
+}
 
 // Get top skills/commands used by a user
 async function _getUserTopSkills(
   identifier: UserIdentifier,
   days: number = 30,
-  limit: number = 20
+  limit: number = 20,
+  source: string = 'all'
 ): Promise<SkillUsage[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
   const { clause, params } = buildUserWhereClause(identifier)
+  const sourceFilter = buildSourceFilter(source)
 
   const result = await clickhouse.query({
     query: `
@@ -403,6 +427,7 @@ async function _getUserTopSkills(
         FROM ai_prompts
         WHERE ${clause}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
       WHERE prompt_type IN ('skill', 'command', 'agent', 'mcp_tool')
@@ -423,21 +448,22 @@ async function _getUserTopSkills(
   }))
 }
 
-export const getUserTopSkills = unstable_cache(
-  _getUserTopSkills,
-  ['user-top-skills'],
-  { revalidate: 60 }
-)
+export function getUserTopSkills(identifier: UserIdentifier, days: number = 30, limit: number = 20, source: string = 'all'): Promise<SkillUsage[]> {
+  const cacheKey = ['user-top-skills', identifier.userId ?? '', identifier.userEmail ?? '', String(days), String(limit), source]
+  return unstable_cache(_getUserTopSkills, cacheKey, { revalidate: 60 })(identifier, days, limit, source)
+}
 
 // Get team prompt type distribution (team='all' for all teams)
 async function _getTeamPromptTypeStats(
   team: string,
-  days: number = 30
+  days: number = 30,
+  source: string = 'all'
 ): Promise<PromptTypeStats[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
   const teamFilter = team === 'all' ? '1=1' : `team = {team:String}`
+  const sourceFilter = buildSourceFilter(source)
   const result = await clickhouse.query({
     query: `
       SELECT
@@ -450,6 +476,7 @@ async function _getTeamPromptTypeStats(
         FROM ai_prompts
         WHERE ${teamFilter}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
       GROUP BY prompt_type
@@ -469,22 +496,23 @@ async function _getTeamPromptTypeStats(
   }))
 }
 
-export const getTeamPromptTypeStats = unstable_cache(
-  _getTeamPromptTypeStats,
-  ['team-prompt-type-stats'],
-  { revalidate: 60 }
-)
+export function getTeamPromptTypeStats(team: string, days: number = 30, source: string = 'all'): Promise<PromptTypeStats[]> {
+  const cacheKey = ['team-prompt-type-stats', team, String(days), source]
+  return unstable_cache(_getTeamPromptTypeStats, cacheKey, { revalidate: 60 })(team, days, source)
+}
 
 // Get team top skills/commands (team='all' for all teams)
 async function _getTeamTopSkills(
   team: string,
   days: number = 30,
-  limit: number = 20
+  limit: number = 20,
+  source: string = 'all'
 ): Promise<SkillUsage[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
   const teamFilter = team === 'all' ? '1=1' : `team = {team:String}`
+  const sourceFilter = buildSourceFilter(source)
   const result = await clickhouse.query({
     query: `
       SELECT
@@ -500,6 +528,7 @@ async function _getTeamTopSkills(
         FROM ai_prompts
         WHERE ${teamFilter}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
       WHERE prompt_type IN ('skill', 'command', 'agent', 'mcp_tool')
@@ -520,21 +549,22 @@ async function _getTeamTopSkills(
   }))
 }
 
-export const getTeamTopSkills = unstable_cache(
-  _getTeamTopSkills,
-  ['team-top-skills'],
-  { revalidate: 60 }
-)
+export function getTeamTopSkills(team: string, days: number = 30, limit: number = 20, source: string = 'all'): Promise<SkillUsage[]> {
+  const cacheKey = ['team-top-skills', team, String(days), String(limit), source]
+  return unstable_cache(_getTeamTopSkills, cacheKey, { revalidate: 60 })(team, days, limit, source)
+}
 
 // Get skill usage trend over time (team='all' for all teams)
 async function _getSkillUsageTrend(
   team: string,
-  days: number = 14
+  days: number = 14,
+  source: string = 'all'
 ): Promise<SkillUsageTrend[]> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return []
 
   const teamFilter = team === 'all' ? '1=1' : `team = {team:String}`
+  const sourceFilter = buildSourceFilter(source)
   const result = await clickhouse.query({
     query: `
       SELECT
@@ -552,6 +582,7 @@ async function _getSkillUsageTrend(
         FROM ai_prompts
         WHERE ${teamFilter}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
       GROUP BY date
@@ -572,21 +603,22 @@ async function _getSkillUsageTrend(
   }))
 }
 
-export const getSkillUsageTrend = unstable_cache(
-  _getSkillUsageTrend,
-  ['skill-usage-trend'],
-  { revalidate: 60 }
-)
+export function getSkillUsageTrend(team: string, days: number = 14, source: string = 'all'): Promise<SkillUsageTrend[]> {
+  const cacheKey = ['skill-usage-trend', team, String(days), source]
+  return unstable_cache(_getSkillUsageTrend, cacheKey, { revalidate: 60 })(team, days, source)
+}
 
 // Get skill adoption rate (team='all' for all teams)
 async function _getSkillAdoptionRate(
   team: string,
-  days: number = 30
+  days: number = 30,
+  source: string = 'all'
 ): Promise<{ total_users: number; skill_users: number; adoption_rate: number }> {
   const clickhouse = getClickHouseClient()
   if (!clickhouse) return { total_users: 0, skill_users: 0, adoption_rate: 0 }
 
   const teamFilter = team === 'all' ? '1=1' : `team = {team:String}`
+  const sourceFilter = buildSourceFilter(source)
   const result = await clickhouse.query({
     query: `
       SELECT
@@ -600,6 +632,7 @@ async function _getSkillAdoptionRate(
         FROM ai_prompts
         WHERE ${teamFilter}
           AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+          ${sourceFilter}
         GROUP BY prompt_id
       )
     `,
@@ -619,8 +652,7 @@ async function _getSkillAdoptionRate(
   }
 }
 
-export const getSkillAdoptionRate = unstable_cache(
-  _getSkillAdoptionRate,
-  ['skill-adoption-rate'],
-  { revalidate: 120 }
-)
+export function getSkillAdoptionRate(team: string, days: number = 30, source: string = 'all'): Promise<{ total_users: number; skill_users: number; adoption_rate: number }> {
+  const cacheKey = ['skill-adoption-rate', team, String(days), source]
+  return unstable_cache(_getSkillAdoptionRate, cacheKey, { revalidate: 120 })(team, days, source)
+}

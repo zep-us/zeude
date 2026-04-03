@@ -14,7 +14,7 @@ const ALLOWED_ENV_KEYS = [
 // Dangerous flags that enable code execution
 const DANGEROUS_FLAGS = ['-e', '--eval', '-c', '--command', '-i', '--interactive', '--inspect', '--inspect-brk']
 
-// POST: Test MCP server connection
+// POST: Test MCP server connection (authenticated)
 export async function POST(req: Request) {
   try {
     const session = await getSession()
@@ -23,15 +23,44 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    if (session.user.role !== 'admin') {
-      return Response.json({ error: 'Admin access required' }, { status: 403 })
+    const body = await req.json()
+    const { url, command, args = [], env = {} } = body
+
+    // URL-based MCP server test
+    if (url && typeof url === 'string') {
+      // SSRF protection: validate URL protocol and block private IPs
+      try {
+        const parsed = new URL(url)
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          return Response.json({ success: false, message: 'Only http:// and https:// URLs are allowed' })
+        }
+        const hostname = parsed.hostname
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' ||
+            /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.)/.test(hostname)) {
+          return Response.json({ success: false, message: 'Private/internal URLs are not allowed for testing' })
+        }
+      } catch {
+        return Response.json({ success: false, message: 'Invalid URL format' })
+      }
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'zeude-test', version: '1.0.0' } } }),
+          signal: AbortSignal.timeout(10000),
+        })
+        if (res.ok) {
+          return Response.json({ success: true, message: 'URL endpoint is reachable', details: `HTTP ${res.status}` })
+        }
+        return Response.json({ success: false, message: `URL returned HTTP ${res.status}`, details: await res.text().catch(() => '') })
+      } catch (e) {
+        return Response.json({ success: false, message: 'Failed to reach URL', details: e instanceof Error ? e.message : 'Unknown error' })
+      }
     }
 
-    const body = await req.json()
-    const { command, args = [], env = {} } = body
-
     if (!command || typeof command !== 'string') {
-      return Response.json({ error: 'Command is required' }, { status: 400 })
+      return Response.json({ error: 'Command or URL is required' }, { status: 400 })
     }
 
     // Security: Only allow npx and uvx commands (removed node/python to prevent arbitrary code execution)

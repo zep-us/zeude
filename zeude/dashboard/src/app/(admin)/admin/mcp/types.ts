@@ -15,10 +15,11 @@ export interface InstallStatusSummary {
   details: InstallStatusDetail[]
 }
 
-export type RegistrationMode = 'preset' | 'json' | 'manual'
+export type RegistrationMode = 'preset' | 'json' | 'manual' | 'url'
 
 export interface MCPFormData {
   name: string
+  url: string
   command: string
   args: string[]
   env: Record<string, string>
@@ -28,6 +29,7 @@ export interface MCPFormData {
 
 export const defaultFormData: MCPFormData = {
   name: '',
+  url: '',
   command: '',
   args: [],
   env: {},

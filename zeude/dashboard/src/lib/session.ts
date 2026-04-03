@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers'
-import { createServerClient } from './supabase'
+import { createServerClient, isDBConnectionError } from './supabase'
 import type { User } from './database.types'
 import { redirect } from 'next/navigation'
 import { cache } from 'react'
@@ -29,6 +29,7 @@ const getDevMockSession = (): SessionWithUser => ({
     team: process.env.MOCK_TEAM || 'dev',
     role: 'admin',
     status: 'active',
+    disabled_skills: [],
     invited_by: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -37,15 +38,40 @@ const getDevMockSession = (): SessionWithUser => ({
 
 // React cache로 동일 요청 내에서 세션 조회 중복 방지
 export const getSession = cache(async (): Promise<SessionWithUser | null> => {
-  // Skip auth in development mode
+  // Skip auth in development mode — fetch real user from DB by MOCK_EMAIL
   if (process.env.NODE_ENV === 'development' && process.env.SKIP_AUTH === 'true') {
+    try {
+      const mockEmail = process.env.MOCK_EMAIL || 'dev@localhost'
+      const supabase = createServerClient()
+      const { data: realUser } = await supabase
+        .from('zeude_users')
+        .select('id, email, name, agent_key, team, role, status, disabled_skills, invited_by, created_at, updated_at')
+        .eq('email', mockEmail)
+        .single()
+
+      if (realUser) {
+        return {
+          id: 'dev-session',
+          token: 'dev-token',
+          user_id: realUser.id,
+          expires_at: '2099-12-31T23:59:59Z',
+          created_at: new Date().toISOString(),
+          user: realUser,
+        }
+      }
+    } catch {
+      // DB not available — fall through to mock session
+    }
+    // Fallback to hardcoded mock if user not found in DB or DB unavailable
     return getDevMockSession()
   }
 
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get('session')?.value
 
-  console.log('[SESSION] Checking session, token exists:', !!sessionToken, sessionToken ? sessionToken.substring(0, 8) : 'none')
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[SESSION] Checking session, token exists:', !!sessionToken)
+  }
 
   if (!sessionToken) {
     return null
@@ -61,7 +87,14 @@ export const getSession = cache(async (): Promise<SessionWithUser | null> => {
     .gt('expires_at', new Date().toISOString())
     .single()
 
-  console.log('[SESSION] DB query result:', { hasSession: !!session, hasUser: !!session?.user, error })
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[SESSION] DB query result:', { hasSession: !!session, hasUser: !!session?.user })
+  }
+
+  // DB 연결 에러(ETIMEDOUT 등)와 실제 세션 없음을 구분
+  if (isDBConnectionError(error)) {
+    throw new Error('DB_CONNECTION_ERROR')
+  }
 
   if (!session || !session.user) {
     return null
@@ -71,23 +104,37 @@ export const getSession = cache(async (): Promise<SessionWithUser | null> => {
 })
 
 export async function getUser(): Promise<User> {
-  const session = await getSession()
+  try {
+    const session = await getSession()
 
-  if (!session?.user) {
-    redirect('/auth?error=session_expired')
+    if (!session?.user) {
+      redirect('/auth?error=session_expired')
+    }
+
+    return session.user
+  } catch (e) {
+    if (e instanceof Error && e.message === 'DB_CONNECTION_ERROR') {
+      redirect('/auth?error=db_connection')
+    }
+    throw e
   }
-
-  return session.user
 }
 
 export async function requireAuth(): Promise<SessionWithUser> {
-  const session = await getSession()
+  try {
+    const session = await getSession()
 
-  if (!session) {
-    redirect('/auth?error=not_authenticated')
+    if (!session) {
+      redirect('/auth?error=not_authenticated')
+    }
+
+    return session
+  } catch (e) {
+    if (e instanceof Error && e.message === 'DB_CONNECTION_ERROR') {
+      redirect('/auth?error=db_connection')
+    }
+    throw e
   }
-
-  return session
 }
 
 export async function logout() {
@@ -102,20 +149,31 @@ export async function logout() {
 }
 
 export async function requireAdmin(): Promise<SessionWithUser> {
-  const session = await getSession()
+  try {
+    const session = await getSession()
 
-  if (!session) {
-    redirect('/auth?error=not_authenticated')
+    if (!session) {
+      redirect('/auth?error=not_authenticated')
+    }
+
+    if (session.user.role !== 'admin') {
+      redirect('/unauthorized')
+    }
+
+    return session
+  } catch (e) {
+    if (e instanceof Error && e.message === 'DB_CONNECTION_ERROR') {
+      redirect('/auth?error=db_connection')
+    }
+    throw e
   }
-
-  if (session.user.role !== 'admin') {
-    redirect('/unauthorized')
-  }
-
-  return session
 }
 
 export async function isAdmin(): Promise<boolean> {
-  const session = await getSession()
-  return session?.user?.role === 'admin'
+  try {
+    const session = await getSession()
+    return session?.user?.role === 'admin'
+  } catch {
+    return false
+  }
 }

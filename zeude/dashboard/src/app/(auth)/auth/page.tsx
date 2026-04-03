@@ -22,6 +22,7 @@ export default async function AuthPage({
           {error === 'invalid_token' && 'Invalid or expired authentication token.'}
           {error === 'session_expired' && 'Your session has expired.'}
           {error === 'session_error' && 'Failed to create session. Please try again.'}
+          {error === 'db_connection' && 'Database connection failed. This is a server infrastructure issue, not an authentication problem.'}
           {error === 'not_authenticated' && 'Please authenticate first.'}
           {!error && 'Please authenticate first.'}
         </p>

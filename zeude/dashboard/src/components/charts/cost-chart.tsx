@@ -1,19 +1,22 @@
 'use client'
 
+import { memo, useMemo } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import type { DailyStats } from '@/lib/clickhouse'
 
 interface CostChartProps {
-  data: DailyStats[]
+  data: { date: string; cost: number }[]
 }
 
-export function CostChart({ data }: CostChartProps) {
-  // Reverse data so oldest is first (left side of chart)
-  const chartData = [...data].reverse().map((d) => ({
-    date: new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    cost: Number(d.cost),
-  }))
+export const CostChart = memo(function CostChart({ data }: CostChartProps) {
+  const chartData = useMemo(
+    () =>
+      [...data].reverse().map((d) => ({
+        date: new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        cost: d.cost,
+      })),
+    [data]
+  )
 
   return (
     <Card>
@@ -66,4 +69,4 @@ export function CostChart({ data }: CostChartProps) {
       </CardContent>
     </Card>
   )
-}
+})

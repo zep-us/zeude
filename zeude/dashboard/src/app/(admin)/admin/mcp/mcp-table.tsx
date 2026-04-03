@@ -27,6 +27,9 @@ interface MCPTableProps {
 }
 
 export function getInstallCommand(server: MCPServer): string {
+  // URL-based servers don't need local installation
+  if (server.url) return server.url
+
   const preset = MCP_PRESETS.find(p =>
     p.command === server.command &&
     server.args.some(arg => p.args.includes(arg))
@@ -77,7 +80,7 @@ export function MCPTable({
       <TableHeader>
         <TableRow>
           <TableHead>Name</TableHead>
-          <TableHead>Command</TableHead>
+          <TableHead>Command / URL</TableHead>
           <TableHead>Teams</TableHead>
           <TableHead>Installed</TableHead>
           <TableHead>Status</TableHead>
@@ -90,7 +93,7 @@ export function MCPTable({
           return (
             <TableRow key={server.id}>
               <TableCell className="font-medium">{server.name}</TableCell>
-              <TableCell className="font-mono text-sm">{server.command}</TableCell>
+              <TableCell className="font-mono text-sm">{server.url || server.command}</TableCell>
               <TableCell>
                 {server.is_global ? (
                   <Badge>All Teams</Badge>

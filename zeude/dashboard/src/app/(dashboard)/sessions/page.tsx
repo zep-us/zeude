@@ -1,8 +1,9 @@
 import { getUser } from '@/lib/session'
-import { getSessionsToday } from '@/lib/clickhouse'
+import { getSessionsToday, parseSourceParam } from '@/lib/clickhouse'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { SourceFilter as SourceFilterComponent } from '@/components/dashboard/source-filter'
 
 function formatDuration(startedAt: string, endedAt: string): string {
   const start = new Date(startedAt)
@@ -28,24 +29,33 @@ function formatTime(timestamp: string): string {
   })
 }
 
-export default async function SessionsPage() {
+interface SessionsPageProps {
+  searchParams: Promise<{ source?: string }>
+}
+
+export default async function SessionsPage({ searchParams }: SessionsPageProps) {
   const user = await getUser()
+  const params = await searchParams
+  const source = parseSourceParam(params.source ?? null)
 
   let sessions: Awaited<ReturnType<typeof getSessionsToday>> = []
 
   try {
-    sessions = await getSessionsToday(user.email, user.id)
+    sessions = await getSessionsToday(user.email, user.id, source)
   } catch (error) {
     console.error('Failed to fetch sessions:', error)
   }
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold">Sessions</h1>
-        <p className="text-muted-foreground">
-          Browse your Claude Code sessions
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Sessions</h1>
+          <p className="text-muted-foreground">
+            Browse your coding sessions
+          </p>
+        </div>
+        <SourceFilterComponent useSearchParams />
       </div>
 
       <Card>
@@ -58,7 +68,7 @@ export default async function SessionsPage() {
         <CardContent>
           {sessions.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No sessions recorded today. Start using Claude Code to see your sessions here.
+              No sessions recorded today. Start using Claude Code or Codex to see your sessions here.
             </div>
           ) : (
             <Table>
