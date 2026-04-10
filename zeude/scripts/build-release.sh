@@ -73,6 +73,7 @@ done
 echo ""
 echo -n "Copying install script... "
 cp "$SCRIPT_DIR/install.sh" "$OUTPUT_DIR/install.sh"
+cp "$SCRIPT_DIR/install-server.sh" "$OUTPUT_DIR/install-server.sh"
 echo -e "${GREEN}OK${NC}"
 
 echo ""

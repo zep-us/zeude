@@ -73,6 +73,13 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+Or install from the repo root with the server installer:
+
+```bash
+cd zeude
+bash scripts/install-server.sh
+```
+
 ### 2. Install the CLI shim
 
 ```bash
@@ -165,6 +172,17 @@ npm run migrate:supabase-to-sqlite
 ```
 
 Use `--force` only when you intentionally want to import into a non-empty SQLite DB.
+
+### Basic server verification
+
+After `install-server.sh` or `docker compose up -d --build`:
+
+```bash
+curl -s http://localhost:3000/api/health
+docker compose --env-file /opt/zeude/config/zeude.env -f /opt/zeude/app/dashboard/docker-compose.yaml ps
+docker compose --env-file /opt/zeude/config/zeude.env -f /opt/zeude/app/dashboard/docker-compose.yaml logs -f
+sqlite3 /var/lib/zeude/zeude.db ".tables"
+```
 
 ### Go binaries
 

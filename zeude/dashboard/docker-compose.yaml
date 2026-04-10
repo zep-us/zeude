@@ -18,7 +18,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}
     volumes:
-      - zeude_data:/var/lib/zeude
+      - ${ZEUDE_DATA_DIR:-/var/lib/zeude}:/var/lib/zeude
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -26,6 +26,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
-volumes:
-  zeude_data:

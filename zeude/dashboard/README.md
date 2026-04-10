@@ -38,3 +38,17 @@ Use `--force` only if the target SQLite DB already has data and you intend to re
 - a persistent volume mounted at `/var/lib/zeude`
 
 ClickHouse remains external and must still be configured via env vars.
+
+From the repo root you can also run:
+
+```bash
+bash scripts/install-server.sh
+```
+
+Quick smoke checks after install:
+
+```bash
+curl -s http://localhost:3000/api/health
+docker compose --env-file /opt/zeude/config/zeude.env -f /opt/zeude/app/dashboard/docker-compose.yaml ps
+sqlite3 /var/lib/zeude/zeude.db ".tables"
+```

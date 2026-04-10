@@ -33,6 +33,7 @@ RUN VERSION=$(cat /tmp/version) && \
 
 # Copy install and uninstall scripts
 COPY scripts/install.sh /releases/install.sh
+COPY scripts/install-server.sh /releases/install-server.sh
 COPY scripts/uninstall.sh /releases/uninstall.sh
 
 # Node build stage
