@@ -159,6 +159,14 @@ const MIGRATIONS = [
 ]
 
 export function migrateSqlite(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _sqlite_migrations (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      applied_at TEXT NOT NULL
+    );
+  `)
+
   const existingRows = db.prepare('SELECT name FROM _sqlite_migrations ORDER BY id').all() as { name: string }[]
   const applied = new Set(
     existingRows.map(row => row.name)

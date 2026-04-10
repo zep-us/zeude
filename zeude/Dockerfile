@@ -45,6 +45,16 @@ WORKDIR /app
 COPY dashboard/package*.json ./
 RUN npm ci
 
+ENV NODE_ENV=production
+ENV DATABASE_PROVIDER=sqlite
+ENV DATABASE_PATH=/tmp/zeude-build.db
+ENV SESSION_SECRET=build-session-secret
+ENV NEXT_PUBLIC_APP_URL=http://localhost:3000
+ENV CLICKHOUSE_URL=http://localhost:8123
+ENV CLICKHOUSE_USER=default
+ENV CLICKHOUSE_PASSWORD=build
+ENV CLICKHOUSE_DATABASE=default
+
 COPY dashboard .
 
 # Copy pre-built Go binaries
