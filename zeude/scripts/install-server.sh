@@ -48,6 +48,48 @@ run_shell() {
   bash -lc "$1"
 }
 
+path_is_writable() {
+  local probe="$1"
+  while [ ! -e "$probe" ] && [ "$probe" != "/" ]; do
+    probe="$(dirname "$probe")"
+  done
+  [ -w "$probe" ]
+}
+
+run_cmd_for_path() {
+  local path="$1"
+  shift
+  if [ "$DRY_RUN" = "1" ]; then
+    printf "${BLUE}[dry-run]${NC} %s\n" "$*"
+    return 0
+  fi
+
+  if [ "$(id -u)" -ne 0 ] && ! path_is_writable "$path"; then
+    need_cmd sudo
+    sudo "$@"
+    return 0
+  fi
+
+  "$@"
+}
+
+run_shell_for_path() {
+  local path="$1"
+  local cmd="$2"
+  if [ "$DRY_RUN" = "1" ]; then
+    printf "${BLUE}[dry-run]${NC} %s\n" "$cmd"
+    return 0
+  fi
+
+  if [ "$(id -u)" -ne 0 ] && ! path_is_writable "$path"; then
+    need_cmd sudo
+    sudo bash -lc "$cmd"
+    return 0
+  fi
+
+  bash -lc "$cmd"
+}
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     printf "${RED}Missing required command:${NC} %s\n" "$1"
@@ -80,33 +122,36 @@ prepare_source_tree() {
 
 copy_local_repo() {
   printf "Copying local repository into %s... " "$APP_DIR"
-  run_cmd mkdir -p "$APP_DIR"
-  run_shell "rsync -a --delete --exclude '.git' --exclude 'node_modules' --exclude '.next' --exclude '.data' --exclude '.omc' '$REPO_ROOT/' '$APP_DIR/'"
+  run_cmd_for_path "$APP_DIR" mkdir -p "$APP_DIR"
+  run_shell_for_path "$APP_DIR" "rsync -a --delete --exclude '.git' --exclude 'node_modules' --exclude '.next' --exclude '.data' --exclude '.omc' '$REPO_ROOT/' '$APP_DIR/'"
   printf "${GREEN}OK${NC}\n"
 }
 
 clone_remote_repo() {
   printf "Fetching repository %s (%s)... " "$REPO_URL" "$GIT_REF"
-  run_cmd mkdir -p "$INSTALL_DIR"
+  run_cmd_for_path "$INSTALL_DIR" mkdir -p "$INSTALL_DIR"
   if [ "$DRY_RUN" = "1" ]; then
     printf "${GREEN}OK${NC}\n"
     return 0
   fi
-  rm -rf "$APP_DIR"
-  git clone --depth 1 --branch "$GIT_REF" "$REPO_URL" "$APP_DIR" >/dev/null 2>&1
+  run_cmd_for_path "$APP_DIR" rm -rf "$APP_DIR"
+  run_shell_for_path "$APP_DIR" "git clone --depth 1 --branch '$GIT_REF' '$REPO_URL' '$APP_DIR' >/dev/null 2>&1"
   printf "${GREEN}OK${NC}\n"
 }
 
 write_env_file() {
   local secret
+  local tmp_env
   secret="$(generate_secret)"
   printf "Writing env file... "
-  run_cmd mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+  run_cmd_for_path "$CONFIG_DIR" mkdir -p "$CONFIG_DIR"
+  run_cmd_for_path "$DATA_DIR" mkdir -p "$DATA_DIR"
   if [ "$DRY_RUN" = "1" ]; then
     printf "${GREEN}OK${NC}\n"
     return 0
   fi
-  cat > "$ENV_FILE" <<EOF
+  tmp_env="$(mktemp)"
+  cat > "$tmp_env" <<EOF
 NODE_ENV=production
 DATABASE_PROVIDER=sqlite
 DATABASE_PATH=/var/lib/zeude/zeude.db
@@ -120,6 +165,29 @@ CLICKHOUSE_DATABASE=$CLICKHOUSE_DATABASE
 OPENROUTER_API_KEY=$OPENROUTER_API_KEY
 OPENROUTER_MODEL=$OPENROUTER_MODEL
 EOF
+  run_cmd_for_path "$ENV_FILE" cp "$tmp_env" "$ENV_FILE"
+  run_cmd_for_path "$ENV_FILE" chmod 600 "$ENV_FILE"
+  rm -f "$tmp_env"
+  printf "${GREEN}OK${NC}\n"
+}
+
+prepare_data_dir() {
+  printf "Preparing data directory permissions... "
+  run_cmd_for_path "$DATA_DIR" mkdir -p "$DATA_DIR"
+
+  if [ "$DRY_RUN" = "1" ]; then
+    printf "${GREEN}OK${NC}\n"
+    return 0
+  fi
+
+  if [ "$(uname -s)" = "Linux" ]; then
+    run_cmd_for_path "$DATA_DIR" chown -R 1001:1001 "$DATA_DIR"
+    run_cmd_for_path "$DATA_DIR" chmod 775 "$DATA_DIR"
+  else
+    printf "${YELLOW}SKIP${NC} (non-Linux host)\n"
+    return 0
+  fi
+
   printf "${GREEN}OK${NC}\n"
 }
 
@@ -203,6 +271,7 @@ main() {
   fi
 
   write_env_file
+  prepare_data_dir
   start_stack
   install_systemd_unit
 
