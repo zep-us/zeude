@@ -11,7 +11,6 @@ COPY package*.json ./
 RUN npm ci
 
 ENV NODE_ENV=production
-ENV DATABASE_PROVIDER=sqlite
 ENV DATABASE_PATH=/tmp/zeude-build.db
 ENV SESSION_SECRET=build-session-secret
 ENV NEXT_PUBLIC_APP_URL=http://localhost:3000
@@ -50,7 +49,6 @@ EXPOSE 3000
 
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-ENV DATABASE_PROVIDER=sqlite
 ENV DATABASE_PATH=/var/lib/zeude/zeude.db
 
 CMD ["node", "server.js"]

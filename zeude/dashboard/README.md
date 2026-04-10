@@ -2,6 +2,8 @@
 
 Operational state lives in SQLite. Analytics stay in ClickHouse.
 
+SQLite is the only supported operational runtime database. Supabase is retained only as a one-time migration source.
+
 ## Local development
 
 ```bash
@@ -14,6 +16,8 @@ npm run dev
 Default local SQLite path is `.data/zeude.db`.
 
 ## One-time migration from Supabase
+
+Existing Supabase-backed deployments must migrate to SQLite before upgrading to this runtime model.
 
 ```bash
 SUPABASE_URL=... \
@@ -33,7 +37,6 @@ Use `--force` only if the target SQLite DB already has data and you intend to re
 
 `docker-compose.yaml` now assumes:
 
-- `DATABASE_PROVIDER=sqlite`
 - `DATABASE_PATH=/var/lib/zeude/zeude.db`
 - a persistent volume mounted at `/var/lib/zeude`
 

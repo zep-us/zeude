@@ -3,11 +3,10 @@ import { z } from 'zod'
 const isProduction = process.env.NODE_ENV === 'production'
 
 const envSchema = z.object({
-  DATABASE_PROVIDER: z.enum(['sqlite', 'supabase']).optional().default('sqlite'),
   DATABASE_PATH: z.string().optional().default(isProduction ? '/var/lib/zeude/zeude.db' : ''),
   SESSION_SECRET: z.string().optional().default(isProduction ? '' : 'dev-session-secret'),
 
-  // Supabase - migration only or compatibility fallback
+  // Supabase migration source
   SUPABASE_URL: z.string().optional().default(''),
   SUPABASE_ANON_KEY: z.string().optional().default(''),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional().default(''),

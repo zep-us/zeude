@@ -7,7 +7,6 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_PROVIDER=sqlite
       - DATABASE_PATH=/var/lib/zeude/zeude.db
       - SESSION_SECRET=${SESSION_SECRET}
       - CLICKHOUSE_URL=${CLICKHOUSE_URL}

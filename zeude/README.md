@@ -57,6 +57,8 @@ When you run `claude` (or `codex`), the Zeude shim:
 
 ### 1. Deploy the dashboard
 
+Zeude now supports SQLite as the only operational runtime database. Supabase is migration-only and is no longer supported as a live runtime backend.
+
 ```bash
 cd dashboard
 cp .env.example .env.local
@@ -157,6 +159,8 @@ SKIP_AUTH=true MOCK_API=true npm run dev
 ```
 
 ### Existing Supabase -> SQLite migration
+
+If you have an existing Supabase-backed deployment, migrate it to SQLite before upgrading to this runtime model. After the migration, Zeude runs against SQLite for operational state.
 
 ```bash
 cd dashboard
