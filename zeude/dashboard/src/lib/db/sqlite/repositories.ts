@@ -5,7 +5,6 @@ import type {
   Hook,
   Invite,
   MCPServer,
-  Session,
   Skill,
   User,
 } from '@/lib/database.types'
@@ -13,7 +12,6 @@ import type {
   HookInstallStatusRecord,
   McpInstallStatusRecord,
   OperationalDb,
-  SessionWithUser,
   UserListOptions,
   UserListResult,
 } from '../types'
@@ -54,16 +52,6 @@ function mapUser(row: Record<string, unknown>): User {
     invited_by: row.invited_by ? String(row.invited_by) : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
-  }
-}
-
-function mapSession(row: Record<string, unknown>): Session {
-  return {
-    id: String(row.id),
-    token: String(row.token),
-    user_id: String(row.user_id),
-    expires_at: String(row.expires_at),
-    created_at: String(row.created_at),
   }
 }
 

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { createClient } = require('@supabase/supabase-js')
 const { ensureSqliteReady, resolveDatabasePath } = require('./migrate-sqlite.cjs')
 

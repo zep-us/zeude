@@ -1,4 +1,4 @@
-import { rateLimit, getClientIP } from '@/lib/rate-limit'
+import { rateLimit } from '@/lib/rate-limit'
 import { createHash } from 'crypto'
 import { getOperationalDb } from '@/lib/db'
 
@@ -100,7 +100,7 @@ export async function GET(
 
     for (const server of applicableServers) {
       // Use a sanitized name as the key (lowercase, replace spaces with dashes)
-      let baseKey = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+      const baseKey = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
 
       // Handle name collisions by appending short UUID suffix
       let serverKey = baseKey
