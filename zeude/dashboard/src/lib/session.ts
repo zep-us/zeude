@@ -1,8 +1,8 @@
 import { cookies } from 'next/headers'
-import { createServerClient, isDBConnectionError } from './supabase'
 import type { User } from './database.types'
 import { redirect } from 'next/navigation'
 import { cache } from 'react'
+import { getOperationalDb } from './db'
 
 interface SessionWithUser {
   id: string
@@ -42,12 +42,8 @@ export const getSession = cache(async (): Promise<SessionWithUser | null> => {
   if (process.env.NODE_ENV === 'development' && process.env.SKIP_AUTH === 'true') {
     try {
       const mockEmail = process.env.MOCK_EMAIL || 'dev@localhost'
-      const supabase = createServerClient()
-      const { data: realUser } = await supabase
-        .from('zeude_users')
-        .select('id, email, name, agent_key, team, role, status, disabled_skills, invited_by, created_at, updated_at')
-        .eq('email', mockEmail)
-        .single()
+      const db = getOperationalDb()
+      const realUser = db.users.findByEmail(mockEmail)
 
       if (realUser) {
         return {
@@ -77,30 +73,18 @@ export const getSession = cache(async (): Promise<SessionWithUser | null> => {
     return null
   }
 
-  const supabase = createServerClient()
-
-  // Select only required columns to reduce data transfer
-  const { data: session, error } = await supabase
-    .from('zeude_sessions')
-    .select('id, token, user_id, expires_at, created_at, user:zeude_users(id, email, name, team, role, status, created_at)')
-    .eq('token', sessionToken)
-    .gt('expires_at', new Date().toISOString())
-    .single()
+  const db = getOperationalDb()
+  const session = db.sessions.findValidByTokenWithUser(sessionToken, new Date().toISOString())
 
   if (process.env.NODE_ENV === 'development') {
     console.log('[SESSION] DB query result:', { hasSession: !!session, hasUser: !!session?.user })
-  }
-
-  // Distinguish DB connection errors (ETIMEDOUT, etc.) from actual missing sessions
-  if (isDBConnectionError(error)) {
-    throw new Error('DB_CONNECTION_ERROR')
   }
 
   if (!session || !session.user) {
     return null
   }
 
-  return session as unknown as SessionWithUser
+  return session
 })
 
 export async function getUser(): Promise<User> {
@@ -142,8 +126,8 @@ export async function logout() {
   const sessionToken = cookieStore.get('session')?.value
 
   if (sessionToken) {
-    const supabase = createServerClient()
-    await supabase.from('zeude_sessions').delete().eq('token', sessionToken)
+    const db = getOperationalDb()
+    db.sessions.deleteByToken(sessionToken)
     cookieStore.delete('session')
   }
 }

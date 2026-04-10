@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 import { fetchHooksData } from '@/lib/data/admin-hooks'
+import { getOperationalDb } from '@/lib/db'
 
 // Maximum script content size: 100KB
 const MAX_SCRIPT_SIZE = 100 * 1024
@@ -60,13 +60,11 @@ export async function POST(req: Request) {
       }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
-    const { data: hook, error } = await supabase
-      .from('zeude_hooks')
-      .insert({
+    const hook = await db.hooks.create({
         name,
-        event,
+        event: event as never,
         description: description || null,
         script_content: scriptContent,
         script_type: scriptType,
@@ -76,13 +74,6 @@ export async function POST(req: Request) {
         status: 'active',
         created_by: session.user.id,
       })
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Failed to create hook:', error)
-      return Response.json({ error: 'Failed to create hook' }, { status: 500 })
-    }
 
     return Response.json({ hook })
   } catch (err) {

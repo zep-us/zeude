@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Zeude Dashboard
 
-## Getting Started
+Operational state lives in SQLite. Analytics stay in ClickHouse.
 
-First, run the development server:
+SQLite is the only supported operational runtime database. Supabase is retained only as a one-time migration source.
+
+## Local development
 
 ```bash
+cp .env.example .env.local
+npm install
+npm run migrate:sqlite
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Default local SQLite path is `.data/zeude.db`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## One-time migration from Supabase
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Existing Supabase-backed deployments must migrate to SQLite before upgrading to this runtime model.
 
-## Learn More
+```bash
+SUPABASE_URL=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+DATABASE_PATH=.data/zeude.db \
+npm run migrate:supabase-to-sqlite -- --dry-run
 
-To learn more about Next.js, take a look at the following resources:
+SUPABASE_URL=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+DATABASE_PATH=.data/zeude.db \
+npm run migrate:supabase-to-sqlite
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Use `--force` only if the target SQLite DB already has data and you intend to replace conflicting rows.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Production
 
-## Deploy on Vercel
+`docker-compose.yaml` now assumes:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `DATABASE_PATH=/var/lib/zeude/zeude.db`
+- a persistent volume mounted at `/var/lib/zeude`
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+ClickHouse remains external and must still be configured via env vars.
+
+From the repo root you can also run:
+
+```bash
+bash scripts/install-server.sh
+```
+
+Quick smoke checks after install:
+
+```bash
+curl -s http://localhost:3000/api/health
+docker compose --env-file /opt/zeude/config/zeude.env -f /opt/zeude/app/dashboard/docker-compose.yaml ps
+sqlite3 /var/lib/zeude/zeude.db ".tables"
+```

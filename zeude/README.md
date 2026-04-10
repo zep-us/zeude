@@ -9,7 +9,7 @@ Zeude gives engineering teams visibility into how Claude Code and OpenAI Codex a
 - **Understand usage** — See who's using what, how much it costs, and which prompts work best
 - **Distribute knowledge** — Push skills, MCP servers, hooks, and agent profiles to your whole team
 - **Support multiple tools** — Monitor both Claude Code and OpenAI Codex from one place
-- **Own your data** — Self-hosted with Supabase + ClickHouse, no data leaves your infrastructure
+- **Own your data** — Self-hosted with SQLite + ClickHouse, no data leaves your infrastructure
 
 ## Features
 
@@ -32,7 +32,7 @@ Developer Machine                          Self-Hosted Infrastructure
 ┌──────────────────────┐                   ┌────────────────────────────┐
 │                      │                   │                            │
 │  claude/codex (shim) │──── on startup ──▶│  Zeude Dashboard (Next.js) │
-│  ~/.zeude/bin/       │   sync config     │  ├── Supabase (users, config)
+│  ~/.zeude/bin/       │   sync config     │  ├── SQLite (users, config)
 │         │            │                   │  └── ClickHouse (telemetry)│
 │         ▼            │                   │                            │
 │  real claude/codex   │                   │  OTel Collector            │
@@ -57,11 +57,29 @@ When you run `claude` (or `codex`), the Zeude shim:
 
 ### 1. Deploy the dashboard
 
+Zeude now supports SQLite as the only operational runtime database. Supabase is migration-only and is no longer supported as a live runtime backend.
+
 ```bash
 cd dashboard
-cp .env.example .env.local   # configure Supabase + ClickHouse URLs
+cp .env.example .env.local
 npm install
+npm run migrate:sqlite
 npm run dev
+```
+
+For a single-host production deploy:
+
+```bash
+cd dashboard
+cp .env.example .env
+docker compose up -d --build
+```
+
+Or install from the repo root with the server installer:
+
+```bash
+cd zeude
+bash scripts/install-server.sh
 ```
 
 ### 2. Install the CLI shim
@@ -95,7 +113,7 @@ zeude/
 ├── dashboard/
 │   ├── src/app/         # Next.js App Router pages & API routes
 │   ├── clickhouse/      # ClickHouse schema, migrations, and tests
-│   └── supabase/        # Supabase migrations
+│   └── supabase/        # Legacy Supabase schema used for one-time migration
 ├── scripts/             # Build and install scripts
 ├── deployments/         # OTel Collector config
 └── Dockerfile           # Multi-platform binary builder
@@ -129,6 +147,8 @@ dashboard_url=https://your-dashboard-url
 ```bash
 cd dashboard
 npm install
+cp .env.example .env.local
+npm run migrate:sqlite
 npm run dev          # http://localhost:3000
 
 # Run tests
@@ -136,6 +156,36 @@ npm test             # 202 vitest tests
 
 # Local dev without auth/DB
 SKIP_AUTH=true MOCK_API=true npm run dev
+```
+
+### Existing Supabase -> SQLite migration
+
+If you have an existing Supabase-backed deployment, migrate it to SQLite before upgrading to this runtime model. After the migration, Zeude runs against SQLite for operational state.
+
+```bash
+cd dashboard
+SUPABASE_URL=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+DATABASE_PATH=.data/zeude.db \
+npm run migrate:supabase-to-sqlite -- --dry-run
+
+SUPABASE_URL=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+DATABASE_PATH=.data/zeude.db \
+npm run migrate:supabase-to-sqlite
+```
+
+Use `--force` only when you intentionally want to import into a non-empty SQLite DB.
+
+### Basic server verification
+
+After `install-server.sh` or `docker compose up -d --build`:
+
+```bash
+curl -s http://localhost:3000/api/health
+docker compose --env-file /opt/zeude/config/zeude.env -f /opt/zeude/app/dashboard/docker-compose.yaml ps
+docker compose --env-file /opt/zeude/config/zeude.env -f /opt/zeude/app/dashboard/docker-compose.yaml logs -f
+sqlite3 /var/lib/zeude/zeude.db ".tables"
 ```
 
 ### Go binaries

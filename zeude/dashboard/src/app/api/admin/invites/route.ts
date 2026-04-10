@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase'
+import { getOperationalDb } from '@/lib/db'
 import { getSession } from '@/lib/session'
 import { randomBytes } from 'crypto'
 
@@ -30,28 +30,25 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Role must be admin or member' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
-
     // Generate secure token (32 bytes = 64 hex chars)
     const token = randomBytes(32).toString('hex')
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+    const db = getOperationalDb()
 
-    const { data: invite, error } = await supabase
-      .from('zeude_invites')
-      .insert({
+    let invite
+    try {
+      invite = await db.invites.create({
         token,
         team,
         role,
         created_by: session.user.id,
         expires_at: expiresAt.toISOString(),
+        used_at: null,
+        used_by: null,
       })
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Failed to create invite:', JSON.stringify(error, null, 2))
-      console.error('Error code:', error.code, 'Message:', error.message)
-      return Response.json({ error: 'Failed to create invite', details: error.message }, { status: 500 })
+    } catch (error) {
+      console.error('Failed to create invite:', error)
+      return Response.json({ error: 'Failed to create invite' }, { status: 500 })
     }
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://zeude.zep.work'
@@ -81,18 +78,8 @@ export async function GET() {
       return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 
-    const supabase = createServerClient()
-
-    const { data: invites, error } = await supabase
-      .from('zeude_invites')
-      .select('id, token, team, role, created_by, expires_at, used_at, used_by, created_at')
-      .order('created_at', { ascending: false })
-      .limit(50)
-
-    if (error) {
-      console.error('Failed to fetch invites:', error)
-      return Response.json({ error: 'Failed to fetch invites' }, { status: 500 })
-    }
+    const db = getOperationalDb()
+    const invites = await db.invites.listRecent(50)
 
     return Response.json({ invites })
   } catch (err) {

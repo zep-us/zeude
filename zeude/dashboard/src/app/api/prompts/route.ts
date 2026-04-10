@@ -1,5 +1,5 @@
 import { getClickHouseClient } from '@/lib/clickhouse'
-import { createServerClient } from '@/lib/supabase'
+import { getOperationalDb } from '@/lib/db'
 import { rateLimit } from '@/lib/rate-limit'
 import {
   AGENT_KEY_PATTERN,
@@ -55,14 +55,10 @@ export async function POST(req: Request) {
     }
 
     // Validate user
-    const supabase = createServerClient()
-    const { data: user, error: userError } = await supabase
-      .from('zeude_users')
-      .select('id, email, team, status')
-      .eq('agent_key', agentKey)
-      .single()
+    const db = getOperationalDb()
+    const user = await db.users.findByAgentKey(agentKey)
 
-    if (userError || !user || user.status !== 'active') {
+    if (!user || user.status !== 'active') {
       return Response.json({ error: 'Invalid or inactive user' }, { status: 401 })
     }
 

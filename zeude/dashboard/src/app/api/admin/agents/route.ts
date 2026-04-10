@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 import { validateFiles } from '@/lib/file-validation'
+import { getOperationalDb } from '@/lib/db'
 
 // Agent name validation: lowercase letters and hyphens only (kebab-case, no digits)
 const AGENT_NAME_PATTERN = /^[a-z]+(-[a-z]+)*$/
@@ -19,25 +19,9 @@ export async function GET() {
       return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 
-    const supabase = createServerClient()
-
-    const { data: agents, error } = await supabase
-      .from('zeude_agents')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Failed to fetch agents:', error)
-      return Response.json({ error: 'Failed to fetch agents' }, { status: 500 })
-    }
-
-    // Get unique teams for filter dropdown
-    const { data: usersData } = await supabase
-      .from('zeude_users')
-      .select('team')
-      .order('team')
-
-    const teams = [...new Set(usersData?.map(u => u.team) || [])]
+    const db = getOperationalDb()
+    const agents = await db.agents.listAll()
+    const teams = await db.users.listTeams()
 
     return Response.json({ agents, teams })
   } catch (err) {
@@ -92,11 +76,10 @@ export async function POST(req: Request) {
       return Response.json({ error: validation.error }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
-    const { data: agent, error } = await supabase
-      .from('zeude_agents')
-      .insert({
+    try {
+      const agent = await db.agents.create({
         name,
         description: description || null,
         files,
@@ -105,22 +88,18 @@ export async function POST(req: Request) {
         status: 'active',
         created_by: session.user.id,
       })
-      .select()
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
+      return Response.json({ agent })
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      if (code === '23505' || code === 'SQLITE_CONSTRAINT_UNIQUE') {
         return Response.json({ error: 'An agent with this name already exists' }, { status: 400 })
       }
-      if (error.code === '23514') {
-        // CHECK constraint violation (name format or files size)
+      if (code === '23514' || code === 'SQLITE_CONSTRAINT_CHECK') {
         return Response.json({ error: 'Invalid agent data: check name format and files size' }, { status: 400 })
       }
       console.error('Failed to create agent:', error)
       return Response.json({ error: 'Failed to create agent' }, { status: 500 })
     }
-
-    return Response.json({ agent })
   } catch (err) {
     console.error('Agent create error:', err)
     return Response.json({ error: 'Internal server error' }, { status: 500 })

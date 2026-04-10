@@ -1,5 +1,5 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
+import { getOperationalDb } from '@/lib/db'
 
 // PATCH: Update MCP server (authenticated)
 export async function PATCH(
@@ -37,17 +37,9 @@ export async function PATCH(
 
     updates.updated_at = new Date().toISOString()
 
-    const supabase = createServerClient()
-
-    const { data: server, error } = await supabase
-      .from('zeude_mcp_servers')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Failed to update MCP server:', error)
+    const db = getOperationalDb()
+    const server = await db.mcp.updateById(id, updates)
+    if (!server) {
       return Response.json({ error: 'Failed to update server' }, { status: 500 })
     }
 
@@ -71,15 +63,9 @@ export async function DELETE(
     }
 
     const { id } = await params
-    const supabase = createServerClient()
-
-    const { error } = await supabase
-      .from('zeude_mcp_servers')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      console.error('Failed to delete MCP server:', error)
+    const db = getOperationalDb()
+    const deleted = await db.mcp.deleteById(id)
+    if (!deleted) {
       return Response.json({ error: 'Failed to delete server' }, { status: 500 })
     }
 

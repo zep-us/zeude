@@ -1,6 +1,6 @@
-import { createServerClient, isDBConnectionError } from '@/lib/supabase'
 import { randomBytes } from 'crypto'
 import { rateLimit, getClientIP } from '@/lib/rate-limit'
+import { getOperationalDb } from '@/lib/db'
 
 const AGENT_KEY_PATTERN = /^zd_[a-f0-9]{64}$/
 
@@ -34,23 +34,14 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Invalid agent key format' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     // Find user by agent key
-    const { data: user, error } = await supabase
-      .from('zeude_users')
-      .select('id, email, name')
-      .eq('agent_key', agentKey)
-      .single()
+    const user = db.users.findByAgentKey(agentKey)
 
-    if (isDBConnectionError(error)) {
-      console.error('DB connection failed during user lookup:', { error, agentKey })
-      return Response.json({ error: 'Database connection failed. This is a server infrastructure issue.', code: 'DB_CONNECTION_ERROR' }, { status: 503 })
-    }
-
-    if (error || !user) {
-      console.error('User lookup failed:', { error, user, agentKey })
-      return Response.json({ error: 'Invalid agent key', debug: error?.message || 'User not found' }, { status: 401 })
+    if (!user) {
+      console.error('User lookup failed:', { agentKey })
+      return Response.json({ error: 'Invalid agent key', debug: 'User not found' }, { status: 401 })
     }
 
     // Generate OTT (64 chars hex)
@@ -58,21 +49,11 @@ export async function POST(req: Request) {
     const expiresAt = new Date(Date.now() + 60 * 1000) // 60 seconds
 
     // Store OTT
-    const { error: insertError } = await supabase.from('zeude_one_time_tokens').insert({
+    db.tokens.create({
       token,
       user_id: user.id,
       expires_at: expiresAt.toISOString(),
     })
-
-    if (isDBConnectionError(insertError)) {
-      console.error('DB connection failed during OTT insert:', { error: insertError })
-      return Response.json({ error: 'Database connection failed. This is a server infrastructure issue.', code: 'DB_CONNECTION_ERROR' }, { status: 503 })
-    }
-
-    if (insertError) {
-      console.error('Failed to create OTT:', insertError)
-      return Response.json({ error: 'Failed to create token', debug: insertError.message }, { status: 500 })
-    }
 
     return Response.json({ token })
   } catch (err) {

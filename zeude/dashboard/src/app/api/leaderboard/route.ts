@@ -1,6 +1,6 @@
 import { getSession } from '@/lib/session'
 import { getClickHouseClient, buildMVSourceCondition, parseSourceParam, escapeClickHouseString } from '@/lib/clickhouse'
-import { createServerClient } from '@/lib/supabase'
+import { getOperationalDb } from '@/lib/db'
 import { EXCLUDED_SKILLS } from '@/lib/skill-utils'
 import { resolveUserNames } from '@/lib/name-resolution'
 
@@ -69,7 +69,7 @@ export async function GET(req: Request) {
     const excludedSkills = EXCLUDED_SKILLS.map(escapeClickHouseString).join(', ')
     const excludedSkillClause = excludedSkills ? `AND d_invoked_name NOT IN (${excludedSkills})` : ''
     const cohortFilter = cohortKey
-      ? await resolveCohortFilter(cohortKey, clickhouse)
+      ? await resolveCohortFilter(cohortKey)
       : null
 
     if (cohortFilter && cohortFilter.memberCount === 0) {
@@ -235,9 +235,8 @@ export async function GET(req: Request) {
 
       // === Name Resolution (Zeude Identity SSOT) ===
       // Shared utility handles Supabase lookup + email fallback + error handling
-      const supabase = createServerClient()
       const allRows = [...tokenData, ...previousTokenData, ...skillUsersData]
-      const { getDisplayName } = await resolveUserNames(supabase, allRows)
+      const { getDisplayName } = await resolveUserNames(allRows)
 
       // Format token leaderboard
       const topTokenUsers: LeaderboardUser[] = tokenData.map((row, index) => {
@@ -266,16 +265,11 @@ export async function GET(req: Request) {
       const skillDescriptionMap = new Map<string, string>()
       if (skillData.length > 0) {
         try {
-          const supabase = createServerClient()
           const slugs = skillData.map(r => r.skill_name)
-          const { data: skillRows } = await supabase
-            .from('zeude_skills')
-            .select('slug, description')
-            .in('slug', slugs)
-          if (skillRows) {
-            for (const row of skillRows) {
-              if (row.description) skillDescriptionMap.set(row.slug, row.description)
-            }
+          const db = getOperationalDb()
+          const skillRows = await db.skills.listBySlugs(slugs)
+          for (const row of skillRows) {
+            if (row.description) skillDescriptionMap.set(row.slug, row.description)
           }
         } catch (descError) {
           console.error('Leaderboard skill description lookup failed:', descError)
@@ -469,17 +463,13 @@ function buildEmptyLeaderboardResponse(
 }
 
 async function resolveCohortFilter(
-  cohortKey: string,
-  clickhouse: ReturnType<typeof getClickHouseClient>
+  cohortKey: string
 ): Promise<CohortFilter> {
-  const supabase = createServerClient()
-
-  const { data: members, error: membersError } = await supabase
-    .from('zeude_cohort_members')
-    .select('user_id, created_at')
-    .eq('cohort_key', cohortKey)
-
-  if (membersError) {
+  const db = getOperationalDb()
+  let members
+  try {
+    members = await db.cohorts.listMembers(cohortKey)
+  } catch (membersError) {
     console.error('Failed to fetch cohort members:', membersError)
     return {
       cohortKey,
@@ -512,12 +502,10 @@ async function resolveCohortFilter(
     }
   }
 
-  const { data: users, error: usersError } = await supabase
-    .from('zeude_users')
-    .select('id, email')
-    .in('id', memberIds)
-
-  if (usersError) {
+  let users
+  try {
+    users = await db.users.listByIds(memberIds)
+  } catch (usersError) {
     console.error('Failed to fetch cohort users:', usersError)
     return {
       cohortKey,
@@ -574,4 +562,3 @@ function getKstDayWindowFromUtcMs(utcMs: number): {
     endUtcMs,
   }
 }
-

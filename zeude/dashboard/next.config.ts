@@ -7,6 +7,7 @@ const withBundleAnalyzer = bundleAnalyzer({
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  serverExternalPackages: ['better-sqlite3'],
   experimental: {
     optimizePackageImports: ['recharts', 'lucide-react'],
   },

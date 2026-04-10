@@ -1,24 +1,14 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
+import { getOperationalDb } from '@/lib/db'
 
 export async function fetchSkillsData() {
   const session = await getSession()
   if (!session) throw new Error('Not authenticated')
   if (session.user.role !== 'admin') throw new Error('Admin access required')
 
-  const supabase = createServerClient()
-
-  const { data: skills, error } = await supabase
-    .from('zeude_skills')
-    .select('*')
-    .order('created_at', { ascending: false })
-
-  if (error) throw new Error(`Failed to fetch skills: ${error.message}`)
-
-  const { data: usersData } = await supabase
-    .from('zeude_users')
-    .select('id, name, email, team, status')
-    .order('team')
+  const db = getOperationalDb()
+  const skills = await db.skills.listAll()
+  const usersData = await db.users.listAll()
 
   const teams = [...new Set(usersData?.map(u => u.team) || [])]
 
@@ -44,14 +34,8 @@ export async function fetchSkillsStats() {
   if (!session) throw new Error('Not authenticated')
   if (session.user.role !== 'admin') throw new Error('Admin access required')
 
-  const supabase = createServerClient()
-
-  const { data: users, error } = await supabase
-    .from('zeude_users')
-    .select('disabled_skills')
-    .eq('status', 'active')
-
-  if (error) throw new Error(`Failed to fetch stats: ${error.message}`)
+  const db = getOperationalDb()
+  const users = (await db.users.listAll()).filter(user => user.status === 'active')
 
   const disableCounts: Record<string, number> = {}
   const totalActiveUsers = users?.length || 0

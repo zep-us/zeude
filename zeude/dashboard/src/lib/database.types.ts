@@ -183,14 +183,14 @@ export interface Database {
         }
       }
     }
-    Views: {}
+    Views: Record<string, never>
     Functions: {
       cleanup_expired_tokens: {
         Args: Record<string, never>
         Returns: undefined
       }
     }
-    Enums: {}
+    Enums: Record<string, never>
   }
 }
 

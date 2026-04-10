@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, memo } from 'react'
+import type { ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -30,6 +31,28 @@ function formatCurrency(num: number): string {
 }
 
 type SortField = 'userName' | 'total' | 'claude' | 'codex' | 'cost'
+
+interface SortHeaderProps {
+  field: SortField
+  children: ReactNode
+  isActive: boolean
+  sortDir: 'asc' | 'desc'
+  onToggle: (field: SortField) => void
+}
+
+function SortHeader({ field, children, isActive, sortDir, onToggle }: SortHeaderProps) {
+  return (
+    <TableHead
+      className="cursor-pointer hover:bg-muted/50 select-none text-center"
+      onClick={() => onToggle(field)}
+    >
+      <div className="flex items-center justify-center gap-1">
+        {children}
+        {isActive && <span className="text-xs">{sortDir === 'asc' ? '↑' : '↓'}</span>}
+      </div>
+    </TableHead>
+  )
+}
 
 export const SourceUserComparison = memo(function SourceUserComparison({ data }: SourceUserComparisonProps) {
   const [sortField, setSortField] = useState<SortField>('total')
@@ -79,21 +102,6 @@ export const SourceUserComparison = memo(function SourceUserComparison({ data }:
     (u) => (u.claude_inputTokens + u.claude_outputTokens > 0) && (u.codex_inputTokens + u.codex_outputTokens > 0)
   )
 
-  function SortHeader({ field, children }: { field: SortField; children: React.ReactNode }) {
-    const isActive = sortField === field
-    return (
-      <TableHead
-        className="cursor-pointer hover:bg-muted/50 select-none text-center"
-        onClick={() => toggleSort(field)}
-      >
-        <div className="flex items-center justify-center gap-1">
-          {children}
-          {isActive && <span className="text-xs">{sortDir === 'asc' ? '↑' : '↓'}</span>}
-        </div>
-      </TableHead>
-    )
-  }
-
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -119,7 +127,7 @@ export const SourceUserComparison = memo(function SourceUserComparison({ data }:
             <Table>
               <TableHeader>
                 <TableRow>
-                  <SortHeader field="userName">User</SortHeader>
+                  <SortHeader field="userName" isActive={sortField === 'userName'} sortDir={sortDir} onToggle={toggleSort}>User</SortHeader>
                   {/* Claude Code columns */}
                   <TableHead colSpan={3} className="text-center border-l bg-blue-500/5">
                     <span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1" />
@@ -130,16 +138,16 @@ export const SourceUserComparison = memo(function SourceUserComparison({ data }:
                     <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" />
                     Codex
                   </TableHead>
-                  <SortHeader field="cost">Total Cost</SortHeader>
+                  <SortHeader field="cost" isActive={sortField === 'cost'} sortDir={sortDir} onToggle={toggleSort}>Total Cost</SortHeader>
                 </TableRow>
                 <TableRow>
                   <TableHead />
                   {/* Claude sub-headers */}
-                  <SortHeader field="claude">Tokens</SortHeader>
+                  <SortHeader field="claude" isActive={sortField === 'claude'} sortDir={sortDir} onToggle={toggleSort}>Tokens</SortHeader>
                   <TableHead className="text-center text-xs">Requests</TableHead>
                   <TableHead className="text-center text-xs">Cost</TableHead>
                   {/* Codex sub-headers */}
-                  <SortHeader field="codex">Tokens</SortHeader>
+                  <SortHeader field="codex" isActive={sortField === 'codex'} sortDir={sortDir} onToggle={toggleSort}>Tokens</SortHeader>
                   <TableHead className="text-center text-xs">Requests</TableHead>
                   <TableHead className="text-center text-xs">Cost</TableHead>
                   <TableHead />

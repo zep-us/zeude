@@ -17,7 +17,6 @@ const QUICK_ACTIONS = [
 
 export function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false)
-  const [mounted, setMounted] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const {
@@ -30,11 +29,6 @@ export function ChatWidget() {
     clearMessages,
   } = useChatState()
 
-  // Client-side only mounting for portal
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -44,7 +38,7 @@ export function ChatWidget() {
     sendMessage(prompt)
   }
 
-  if (!mounted) return null
+  if (typeof document === 'undefined') return null
 
   const widget = (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">

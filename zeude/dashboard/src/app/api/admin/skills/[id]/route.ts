@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 import { MAX_CONTENT_SIZE, validateFiles } from '@/lib/file-validation'
+import { getOperationalDb } from '@/lib/db'
 
 // PATCH: Update skill (authenticated)
 export async function PATCH(
@@ -47,7 +47,7 @@ export async function PATCH(
       }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     // Validate keyword arrays if provided
     if (primaryKeywords !== undefined) {
@@ -116,11 +116,7 @@ export async function PATCH(
     // Auto-add current user as contributor if not explicitly managing contributors
     // Only when: not the creator AND not already a contributor
     if (contributors === undefined) {
-      const { data: existing } = await supabase
-        .from('zeude_skills')
-        .select('created_by, contributors')
-        .eq('id', id)
-        .single()
+      const existing = await db.skills.findById(id)
 
       if (existing) {
         const userId = session.user.id
@@ -131,21 +127,21 @@ export async function PATCH(
       }
     }
 
-    const { data: skill, error } = await supabase
-      .from('zeude_skills')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
+    let skill
+    try {
+      skill = await db.skills.updateById(id, updateData)
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      if (code === '23505' || code === 'SQLITE_CONSTRAINT_UNIQUE') {
         return Response.json({ error: 'A skill with this slug already exists' }, { status: 400 })
       }
-      if (error.code === '23514') {
+      if (code === '23514' || code === 'SQLITE_CONSTRAINT_CHECK') {
         return Response.json({ error: 'Invalid skill data: check files size (max 512KB total)' }, { status: 400 })
       }
       console.error('Failed to update skill:', error)
+      return Response.json({ error: 'Failed to update skill' }, { status: 500 })
+    }
+    if (!skill) {
       return Response.json({ error: 'Failed to update skill' }, { status: 500 })
     }
 
@@ -173,15 +169,9 @@ export async function DELETE(
     }
 
     const { id } = await params
-    const supabase = createServerClient()
-
-    const { error } = await supabase
-      .from('zeude_skills')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      console.error('Failed to delete skill:', error)
+    const db = getOperationalDb()
+    const deleted = await db.skills.deleteById(id)
+    if (!deleted) {
       return Response.json({ error: 'Failed to delete skill' }, { status: 500 })
     }
 

@@ -3,10 +3,13 @@ import { z } from 'zod'
 const isProduction = process.env.NODE_ENV === 'production'
 
 const envSchema = z.object({
-  // Supabase — strict in production, optional in development (SKIP_AUTH=true bypasses auth)
-  SUPABASE_URL: isProduction ? z.string().url('SUPABASE_URL must be a valid URL') : z.string().optional().default(''),
-  SUPABASE_ANON_KEY: isProduction ? z.string().min(1, 'SUPABASE_ANON_KEY is required') : z.string().optional().default(''),
-  SUPABASE_SERVICE_ROLE_KEY: isProduction ? z.string().min(1, 'SUPABASE_SERVICE_ROLE_KEY is required') : z.string().optional().default(''),
+  DATABASE_PATH: z.string().optional().default(isProduction ? '/var/lib/zeude/zeude.db' : ''),
+  SESSION_SECRET: z.string().optional().default(isProduction ? '' : 'dev-session-secret'),
+
+  // Supabase migration source
+  SUPABASE_URL: z.string().optional().default(''),
+  SUPABASE_ANON_KEY: z.string().optional().default(''),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().optional().default(''),
 
   // ClickHouse
   CLICKHOUSE_URL: z.string().url().optional().default('http://localhost:8123'),

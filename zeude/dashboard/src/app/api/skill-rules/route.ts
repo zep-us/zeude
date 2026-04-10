@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase'
+import { getOperationalDb } from '@/lib/db'
 import { rateLimit } from '@/lib/rate-limit'
 import { AGENT_KEY_PATTERN } from '@/lib/prompt-utils'
 import { EXCLUDED_SKILLS } from '@/lib/skill-utils'
@@ -64,36 +64,13 @@ export async function GET(req: Request) {
       )
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
+    const user = await db.users.findByAgentKey(agentKey)
 
-    // Find user by agent key
-    const { data: user, error: userError } = await supabase
-      .from('zeude_users')
-      .select('id, team, status')
-      .eq('agent_key', agentKey)
-      .single()
-
-    if (userError || !user || user.status !== 'active') {
+    if (!user || user.status !== 'active') {
       return Response.json({ error: 'Invalid or inactive user' }, { status: 401 })
     }
-
-    // Fetch skills with rules - filter at SQL level for efficiency
-    // Include command-style skills as well so guidance can suggest all installed skills.
-    // Keep column selection minimal for performance.
-    const { data: skills, error: skillsError } = await supabase
-      .from('zeude_skills')
-      .select(
-        'slug, description, keywords, primary_keywords, secondary_keywords, hint, is_general, is_global, teams'
-      )
-      .eq('status', 'active')
-      .or(`is_global.eq.true,teams.cs.{${user.team || ''}}`)
-
-    if (skillsError) {
-      console.error('Failed to fetch skills:', skillsError)
-      return Response.json({ error: 'Failed to fetch skills' }, { status: 500 })
-    }
-
-    const applicableSkills = skills || []
+    const applicableSkills = await db.skills.listActiveForTeam(user.team || '')
 
     // Build skill-rules.json format
     // Also exclude skills in EXCLUDED_SKILLS list

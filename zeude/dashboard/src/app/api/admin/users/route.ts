@@ -1,5 +1,5 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
+import { getOperationalDb } from '@/lib/db'
 
 // Sanitize search input to prevent PostgREST filter injection
 function sanitizeSearch(input: string): string {
@@ -28,44 +28,18 @@ export async function GET(req: Request) {
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 100)
     const offset = (page - 1) * limit
 
-    const supabase = createServerClient()
-
-    // Single query with count to avoid N+1
-    let query = supabase
-      .from('zeude_users')
-      .select('id, email, name, team, role, status, created_at, updated_at', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
-
-    if (team) {
-      query = query.eq('team', team)
-    }
-
-    if (status) {
-      query = query.eq('status', status)
-    }
-
-    if (search) {
-      const safeSearch = sanitizeSearch(search)
-      if (safeSearch.length > 0) {
-        query = query.or(`name.ilike.%${safeSearch}%,email.ilike.%${safeSearch}%`)
-      }
-    }
-
-    const { data: users, error, count } = await query
-
-    if (error) {
-      console.error('Failed to fetch users:', error)
-      return Response.json({ error: 'Failed to fetch users' }, { status: 500 })
-    }
-
-    // Get unique teams using DISTINCT via RPC or separate optimized query
-    const { data: teamsData } = await supabase
-      .from('zeude_users')
-      .select('team')
-      .not('team', 'is', null)
-
-    const teams = [...new Set(teamsData?.map(t => t.team) || [])].sort()
+    const db = getOperationalDb()
+    const safeSearch = search ? sanitizeSearch(search) : ''
+    const result = await db.users.listUsers({
+      team,
+      status,
+      search: safeSearch || undefined,
+      page,
+      limit,
+    })
+    const users = result.users
+    const count = result.total
+    const teams = (await db.users.listTeams()).sort()
 
     return Response.json({
       users,
