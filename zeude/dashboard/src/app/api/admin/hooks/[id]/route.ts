@@ -1,5 +1,5 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
+import { getOperationalDb } from '@/lib/db'
 
 // Maximum script content size: 100KB
 const MAX_SCRIPT_SIZE = 100 * 1024
@@ -39,7 +39,7 @@ export async function PATCH(
       }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     const updateData: Record<string, unknown> = {}
     if (name !== undefined) updateData.name = name
@@ -55,15 +55,8 @@ export async function PATCH(
     if (teams !== undefined && !isGlobal) updateData.teams = teams
     if (status !== undefined) updateData.status = status
 
-    const { data: hook, error } = await supabase
-      .from('zeude_hooks')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Failed to update hook:', error)
+    const hook = await db.hooks.updateById(id, updateData)
+    if (!hook) {
       return Response.json({ error: 'Failed to update hook' }, { status: 500 })
     }
 
@@ -91,15 +84,9 @@ export async function DELETE(
     }
 
     const { id } = await params
-    const supabase = createServerClient()
-
-    const { error } = await supabase
-      .from('zeude_hooks')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      console.error('Failed to delete hook:', error)
+    const db = getOperationalDb()
+    const deleted = await db.hooks.deleteById(id)
+    if (!deleted) {
       return Response.json({ error: 'Failed to delete hook' }, { status: 500 })
     }
 

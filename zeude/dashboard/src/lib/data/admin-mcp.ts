@@ -1,5 +1,5 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
+import { getOperationalDb } from '@/lib/db'
 
 interface InstallStatusSummary {
   installed: number
@@ -18,26 +18,14 @@ export async function fetchMCPData() {
   if (!session) throw new Error('Not authenticated')
   if (session.user.role !== 'admin') throw new Error('Admin access required')
 
-  const supabase = createServerClient()
-
-  const { data: servers, error } = await supabase
-    .from('zeude_mcp_servers')
-    .select('*')
-    .order('created_at', { ascending: false })
-
-  if (error) throw new Error(`Failed to fetch MCP servers: ${error.message}`)
-
-  const { data: usersData } = await supabase
-    .from('zeude_users')
-    .select('id, name, email, team')
-    .order('team')
+  const db = getOperationalDb()
+  const servers = await db.mcp.listAll()
+  const usersData = await db.users.listAll()
 
   const teams = [...new Set(usersData?.map(u => u.team) || [])]
   const users = usersData || []
 
-  const { data: installStatus } = await supabase
-    .from('zeude_mcp_install_status')
-    .select('user_id, mcp_server_id, installed, version, last_checked_at')
+  const installStatus = await db.installStatus.listMcpStatuses()
 
   const installStatusByServer: Record<string, InstallStatusSummary> = {}
 

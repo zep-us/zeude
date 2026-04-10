@@ -1,8 +1,8 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 import { hasAllowedTools } from '@/lib/skill-utils'
 import { validateFiles } from '@/lib/file-validation'
 import { fetchSkillsData } from '@/lib/data/admin-skills'
+import { getOperationalDb } from '@/lib/db'
 
 // GET: List all Skills (authenticated)
 export async function GET() {
@@ -71,15 +71,14 @@ export async function POST(req: Request) {
       return Response.json({ error: validation.error }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     // Check if this is a command (has allowed-tools) - skip LLM generation
     const isCommand = hasAllowedTools(files['SKILL.md'])
 
     // New skills: content = NULL (old shim gracefully skips, new shim uses files)
-    const { data: skill, error } = await supabase
-      .from('zeude_skills')
-      .insert({
+    try {
+      const skill = await db.skills.create({
         name,
         slug,
         description: description || null,
@@ -89,6 +88,7 @@ export async function POST(req: Request) {
         is_global: isGlobal,
         is_general: isGeneral,
         is_command: isCommand,
+        keywords: [],
         primary_keywords: primaryKeywords || [],
         secondary_keywords: secondaryKeywords || [],
         hint: hint || '',
@@ -96,21 +96,18 @@ export async function POST(req: Request) {
         status: 'active',
         created_by: session.user.id,
       })
-      .select()
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
+      return Response.json({ skill })
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      if (code === '23505' || code === 'SQLITE_CONSTRAINT_UNIQUE') {
         return Response.json({ error: 'A skill with this slug already exists' }, { status: 400 })
       }
-      if (error.code === '23514') {
+      if (code === '23514' || code === 'SQLITE_CONSTRAINT_CHECK') {
         return Response.json({ error: 'Invalid skill data: check files size (max 5MB total)' }, { status: 400 })
       }
       console.error('Failed to create skill:', error)
       return Response.json({ error: 'Failed to create skill' }, { status: 500 })
     }
-
-    return Response.json({ skill })
   } catch (err) {
     console.error('Skill create error:', err)
     return Response.json({ error: 'Internal server error' }, { status: 500 })

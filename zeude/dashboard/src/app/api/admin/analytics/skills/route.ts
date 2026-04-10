@@ -1,6 +1,5 @@
 import { parseSourceParam } from '@/lib/clickhouse'
 import { getSession } from '@/lib/session'
-import { createServerClient } from '@/lib/supabase'
 import {
   getTeamPromptTypeStats,
   getTeamTopSkills,
@@ -17,15 +16,7 @@ export async function GET(req: Request) {
       return Response.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    // Check if user is admin
-    const supabase = createServerClient()
-    const { data: user } = await supabase
-      .from('zeude_users')
-      .select('role, team')
-      .eq('id', session.user_id)
-      .single()
-
-    if (!user || user.role !== 'admin') {
+    if (session.user.role !== 'admin') {
       return Response.json({ error: 'Admin access required' }, { status: 403 })
     }
 

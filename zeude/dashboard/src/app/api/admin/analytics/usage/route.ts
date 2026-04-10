@@ -1,6 +1,5 @@
 import { getSession } from '@/lib/session'
 import { getClickHouseClient, buildMVSourceCondition, parseSourceParam } from '@/lib/clickhouse'
-import { createServerClient } from '@/lib/supabase'
 import { resolveUserNames } from '@/lib/name-resolution'
 import type { SourceBreakdown, SourceTrendPoint, UserSourceUsage } from '@/lib/source-types'
 
@@ -289,8 +288,7 @@ export async function GET(req: Request) {
 
       // === Name Resolution (Zeude Identity SSOT) ===
       // Shared utility handles Supabase lookup + email fallback + error handling
-      const supabase = createServerClient()
-      const { getDisplayName } = await resolveUserNames(supabase, userData)
+      const { getDisplayName } = await resolveUserNames(userData)
 
       // Process users - cost comes directly from query
       const byUser: UserUsage[] = userData.map(row => {

@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 import { validateFiles } from '@/lib/file-validation'
+import { getOperationalDb } from '@/lib/db'
 
 // Agent name validation: lowercase letters and hyphens only (kebab-case, no digits)
 const AGENT_NAME_PATTERN = /^[a-z]+(-[a-z]+)*$/
@@ -57,7 +57,7 @@ export async function PATCH(
       }
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     const updateData: Record<string, unknown> = {}
     if (name !== undefined) updateData.name = name
@@ -74,21 +74,21 @@ export async function PATCH(
     if (teams !== undefined && !isGlobal) updateData.teams = teams
     if (status !== undefined) updateData.status = status
 
-    const { data: agent, error } = await supabase
-      .from('zeude_agents')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
+    let agent
+    try {
+      agent = await db.agents.updateById(id, updateData)
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      if (code === '23505' || code === 'SQLITE_CONSTRAINT_UNIQUE') {
         return Response.json({ error: 'An agent with this name already exists' }, { status: 400 })
       }
-      if (error.code === '23514') {
+      if (code === '23514' || code === 'SQLITE_CONSTRAINT_CHECK') {
         return Response.json({ error: 'Invalid agent data: check name format and files size' }, { status: 400 })
       }
       console.error('Failed to update agent:', error)
+      return Response.json({ error: 'Failed to update agent' }, { status: 500 })
+    }
+    if (!agent) {
       return Response.json({ error: 'Failed to update agent' }, { status: 500 })
     }
 
@@ -116,15 +116,9 @@ export async function DELETE(
     }
 
     const { id } = await params
-    const supabase = createServerClient()
-
-    const { error } = await supabase
-      .from('zeude_agents')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      console.error('Failed to delete agent:', error)
+    const db = getOperationalDb()
+    const deleted = await db.agents.deleteById(id)
+    if (!deleted) {
       return Response.json({ error: 'Failed to delete agent' }, { status: 500 })
     }
 

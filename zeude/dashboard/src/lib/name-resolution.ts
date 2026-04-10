@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { getOperationalDb } from './db'
 
 export interface UserRow {
   user_id: string
@@ -22,11 +22,11 @@ export interface NameResolutionResult {
  * Degradation chain: Supabase name → email → userId → 'Unknown'
  */
 export async function resolveUserNames(
-  supabase: SupabaseClient,
   rows: UserRow[]
 ): Promise<NameResolutionResult> {
   const userIdToName = new Map<string, string>()
   const userIdToEmail = new Map<string, string>()
+  const db = getOperationalDb()
 
   try {
     // Collect unique non-empty user IDs
@@ -40,16 +40,10 @@ export async function resolveUserNames(
     }
 
     // Direct Supabase lookup — MV user_id is Supabase UUID
-    const { data: users } = await supabase
-      .from('zeude_users')
-      .select('id, name, email')
-      .in('id', Array.from(allUserIds))
-
-    if (users) {
-      for (const user of users) {
-        if (user.name) userIdToName.set(user.id, user.name)
-        if (user.email) userIdToEmail.set(user.id, user.email)
-      }
+    const users = db.users.listByIds(Array.from(allUserIds))
+    for (const user of users) {
+      if (user.name) userIdToName.set(user.id, user.name)
+      if (user.email) userIdToEmail.set(user.id, user.email)
     }
 
     // Email fallback for unresolved users (legacy data without zeude.user.id)
@@ -61,20 +55,16 @@ export async function resolveUserNames(
     }
 
     if (unresolvedEmails.size > 0) {
-      const { data: emailUsers } = await supabase
-        .from('zeude_users')
-        .select('id, name, email')
-        .in('email', Array.from(unresolvedEmails))
-
-      if (emailUsers) {
-        const emailToName = new Map<string, string>()
-        for (const user of emailUsers) {
-          if (user.name && user.email) emailToName.set(user.email, user.name)
+      const emailToName = new Map<string, string>()
+      for (const email of unresolvedEmails) {
+        const user = db.users.findByEmail(email)
+        if (user?.name) {
+          emailToName.set(email, user.name)
         }
-        for (const row of rows) {
-          if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
-            userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
-          }
+      }
+      for (const row of rows) {
+        if (row.user_email && emailToName.has(row.user_email) && !userIdToName.has(row.user_id)) {
+          userIdToName.set(row.user_id, emailToName.get(row.user_email)!)
         }
       }
     }

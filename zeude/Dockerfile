@@ -36,7 +36,7 @@ COPY scripts/install.sh /releases/install.sh
 COPY scripts/uninstall.sh /releases/uninstall.sh
 
 # Node build stage
-FROM node:20-alpine AS builder
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -53,15 +53,17 @@ COPY --from=go-builder /releases ./public/releases
 RUN npm run build
 
 # Production stage
-FROM node:20-alpine AS runner
+FROM node:20-bookworm-slim AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 
 # Create non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN groupadd --system --gid 1001 nodejs && \
+    useradd --system --uid 1001 --gid 1001 nextjs && \
+    mkdir -p /var/lib/zeude && \
+    chown -R nextjs:nodejs /var/lib/zeude
 
 # Copy built assets
 COPY --from=builder /app/public ./public
@@ -74,5 +76,7 @@ EXPOSE 3000
 
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+ENV DATABASE_PROVIDER=sqlite
+ENV DATABASE_PATH=/var/lib/zeude/zeude.db
 
 CMD ["node", "server.js"]

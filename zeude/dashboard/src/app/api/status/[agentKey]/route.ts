@@ -1,5 +1,5 @@
-import { createServerClient } from '@/lib/supabase'
 import { rateLimit } from '@/lib/rate-limit'
+import { getOperationalDb } from '@/lib/db'
 
 // Agent key format: zd_ followed by 64 hex characters
 const AGENT_KEY_PATTERN = /^zd_[a-f0-9]{64}$/
@@ -59,16 +59,12 @@ export async function POST(
       return Response.json({ error: 'Invalid agent key format' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     // Find user by agent key
-    const { data: user, error: userError } = await supabase
-      .from('zeude_users')
-      .select('id, team, status')
-      .eq('agent_key', agentKey)
-      .single()
+    const user = db.users.findByAgentKey(agentKey)
 
-    if (userError || !user) {
+    if (!user) {
       return Response.json({ error: 'Invalid agent key' }, { status: 401 })
     }
 
@@ -84,19 +80,11 @@ export async function POST(
     }
 
     // Get MCP servers to map server names to IDs
-    const { data: mcpServers, error: serversError } = await supabase
-      .from('zeude_mcp_servers')
-      .select('id, name')
-      .eq('status', 'active')
-
-    if (serversError) {
-      console.error('Failed to fetch MCP servers:', serversError)
-      return Response.json({ error: 'Failed to fetch servers' }, { status: 500 })
-    }
+    const mcpServers = db.mcp.listActiveNamesAndIds()
 
     // Create a map of server name (kebab-cased) to server ID
     const serverNameToId: Record<string, string> = {}
-    for (const server of mcpServers || []) {
+    for (const server of mcpServers) {
       const kebabName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
       serverNameToId[kebabName] = server.id
       // Also map the exact name
@@ -125,16 +113,7 @@ export async function POST(
       }
 
       if (mcpUpsertData.length > 0) {
-        const { error: upsertError } = await supabase
-          .from('zeude_mcp_install_status')
-          .upsert(mcpUpsertData, {
-            onConflict: 'user_id,mcp_server_id',
-          })
-
-        if (upsertError) {
-          console.error('Failed to upsert MCP install status:', upsertError)
-          return Response.json({ error: 'Failed to save MCP status' }, { status: 500 })
-        }
+        db.installStatus.upsertMcpStatuses(mcpUpsertData)
       }
     }
 
@@ -155,16 +134,7 @@ export async function POST(
       }
 
       if (hookUpsertData.length > 0) {
-        const { error: upsertError } = await supabase
-          .from('zeude_hook_install_status')
-          .upsert(hookUpsertData, {
-            onConflict: 'user_id,hook_id',
-          })
-
-        if (upsertError) {
-          console.error('Failed to upsert hook install status:', upsertError)
-          return Response.json({ error: 'Failed to save hook status' }, { status: 500 })
-        }
+        db.installStatus.upsertHookStatuses(hookUpsertData)
       }
     }
 

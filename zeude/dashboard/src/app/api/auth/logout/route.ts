@@ -1,14 +1,14 @@
 import { cookies } from 'next/headers'
-import { createServerClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
+import { getOperationalDb } from '@/lib/db'
 
 export async function POST() {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get('session')?.value
 
   if (sessionToken) {
-    const supabase = createServerClient()
-    await supabase.from('zeude_sessions').delete().eq('token', sessionToken)
+    const db = getOperationalDb()
+    db.sessions.deleteByToken(sessionToken)
     cookieStore.delete('session')
   }
 

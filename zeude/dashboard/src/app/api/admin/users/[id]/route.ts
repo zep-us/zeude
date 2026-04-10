@@ -1,5 +1,5 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
+import { getOperationalDb } from '@/lib/db'
 
 // UUID v4 validation regex
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -30,15 +30,10 @@ export async function GET(
       return Response.json({ error: 'Invalid user ID format' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
+    const user = await db.users.findById(id)
 
-    const { data: user, error } = await supabase
-      .from('zeude_users')
-      .select('id, email, name, team, role, status, invited_by, created_at, updated_at')
-      .eq('id', id)
-      .single()
-
-    if (error || !user) {
+    if (!user) {
       return Response.json({ error: 'User not found' }, { status: 404 })
     }
 
@@ -104,12 +99,8 @@ export async function PATCH(
     }
 
     // Prevent restoring a deleted user via PATCH
-    const supabaseCheck = createServerClient()
-    const { data: targetUser } = await supabaseCheck
-      .from('zeude_users')
-      .select('status')
-      .eq('id', id)
-      .single()
+    const db = getOperationalDb()
+    const targetUser = await db.users.findById(id)
 
     if (targetUser?.status === 'deleted') {
       return Response.json({ error: 'Cannot modify a deleted user' }, { status: 400 })
@@ -125,17 +116,8 @@ export async function PATCH(
       return Response.json({ error: 'Cannot deactivate yourself' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
-
-    const { data: user, error } = await supabase
-      .from('zeude_users')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id, email, name, team, role, status')
-      .single()
-
-    if (error) {
-      console.error('Failed to update user:', error)
+    const user = await db.users.updateById(id, updates)
+    if (!user) {
       return Response.json({ error: 'Failed to update user' }, { status: 500 })
     }
 
@@ -173,18 +155,14 @@ export async function DELETE(
       return Response.json({ error: 'Cannot delete yourself' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
+    const existing = await db.users.findById(id)
+    if (!existing || existing.status === 'deleted') {
+      return Response.json({ error: 'User not found or already deleted' }, { status: 404 })
+    }
 
-    const { data: user, error } = await supabase
-      .from('zeude_users')
-      .update({ status: 'deleted', updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .neq('status', 'deleted')
-      .select('id, email, name, status')
-      .single()
-
-    if (error || !user) {
-      console.error('Failed to delete user:', error)
+    const user = await db.users.updateById(id, { status: 'deleted' })
+    if (!user) {
       return Response.json({ error: 'User not found or already deleted' }, { status: 404 })
     }
 

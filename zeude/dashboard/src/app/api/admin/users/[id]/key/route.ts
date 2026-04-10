@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 import { randomBytes } from 'crypto'
+import { getOperationalDb } from '@/lib/db'
 
 // POST: Generate new agent key for user
 export async function POST(
@@ -19,29 +19,19 @@ export async function POST(
     }
 
     const { id } = await params
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     // Generate new agent key
     const agentKey = 'zd_' + randomBytes(32).toString('hex')
 
-    const { data: user, error } = await supabase
-      .from('zeude_users')
-      .update({
-        agent_key: agentKey,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select('id, email, name')
-      .single()
-
-    if (error) {
-      console.error('Failed to regenerate key:', error)
+    const updated = await db.users.updateAgentKey(id, agentKey)
+    if (!updated) {
       return Response.json({ error: 'Failed to regenerate key' }, { status: 500 })
     }
 
     return Response.json({
       agentKey,
-      user,
+      user: { id: updated.id, email: updated.email, name: updated.name },
       message: 'New key generated. Share securely with the user.',
     })
   } catch (err) {
@@ -73,22 +63,16 @@ export async function DELETE(
       return Response.json({ error: 'Cannot revoke your own key' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     // Generate a revoked key that won't match any valid format
     const revokedKey = 'revoked_' + randomBytes(16).toString('hex')
 
-    const { error } = await supabase
-      .from('zeude_users')
-      .update({
-        agent_key: revokedKey,
-        status: 'inactive',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-
-    if (error) {
-      console.error('Failed to revoke key:', error)
+    const updated = await db.users.updateById(id, {
+      agent_key: revokedKey,
+      status: 'inactive',
+    })
+    if (!updated) {
       return Response.json({ error: 'Failed to revoke key' }, { status: 500 })
     }
 

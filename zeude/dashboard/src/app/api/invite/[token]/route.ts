@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { randomBytes } from 'crypto'
 import { rateLimit } from '@/lib/rate-limit'
+import { getOperationalDb } from '@/lib/db'
 
 // Email validation regex (RFC 5322 simplified)
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -17,15 +17,10 @@ export async function GET(
       return Response.json({ valid: false, reason: 'invalid_format' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
+    const invite = db.invites.findByToken(token)
 
-    const { data: invite, error } = await supabase
-      .from('zeude_invites')
-      .select('id, team, role, expires_at, used_at')
-      .eq('token', token)
-      .single()
-
-    if (error || !invite) {
+    if (!invite) {
       return Response.json({ valid: false, reason: 'not_found' })
     }
 
@@ -85,27 +80,16 @@ export async function POST(
       return Response.json({ error: 'Valid email is required' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
     // ATOMIC: Claim invite FIRST using update-first pattern to prevent race condition
     // This ensures only one request can successfully claim an unused, non-expired invite
-    const { data: claimedInvite, error: claimError } = await supabase
-      .from('zeude_invites')
-      .update({ used_at: new Date().toISOString() })
-      .eq('token', token)
-      .is('used_at', null)
-      .gt('expires_at', new Date().toISOString())
-      .select('id, team, role, created_by')
-      .single()
+    const claimedInvite = db.invites.claimByToken(token, new Date().toISOString())
 
-    if (claimError || !claimedInvite) {
+    if (!claimedInvite) {
       // Could be: not found, already used, or expired
       // Check which case for better error message
-      const { data: invite } = await supabase
-        .from('zeude_invites')
-        .select('used_at, expires_at')
-        .eq('token', token)
-        .single()
+      const invite = db.invites.findByToken(token)
 
       if (!invite) {
         return Response.json({ error: 'Invite not found' }, { status: 404 })
@@ -120,18 +104,11 @@ export async function POST(
     }
 
     // Check if email already exists
-    const { data: existingUser } = await supabase
-      .from('zeude_users')
-      .select('id')
-      .eq('email', email.toLowerCase())
-      .single()
+    const existingUser = db.users.findByEmail(email.toLowerCase())
 
     if (existingUser) {
       // Rollback: unmark the invite since we can't create the user
-      await supabase
-        .from('zeude_invites')
-        .update({ used_at: null, used_by: null })
-        .eq('id', claimedInvite.id)
+      db.invites.resetClaim(claimedInvite.id)
       return Response.json({ error: 'Email already registered' }, { status: 400 })
     }
 
@@ -139,35 +116,27 @@ export async function POST(
     const agentKey = 'zd_' + randomBytes(32).toString('hex')
 
     // Create user
-    const { data: newUser, error: userError } = await supabase
-      .from('zeude_users')
-      .insert({
+    let newUser
+    try {
+      newUser = db.users.create({
         email: email.toLowerCase(),
         name,
         agent_key: agentKey,
         team: claimedInvite.team,
         role: claimedInvite.role,
         status: 'active',
+        disabled_skills: [],
         invited_by: claimedInvite.created_by,
       })
-      .select('id')
-      .single()
-
-    if (userError) {
+    } catch (userError) {
       console.error('Failed to create user:', userError)
       // Rollback: unmark the invite
-      await supabase
-        .from('zeude_invites')
-        .update({ used_at: null, used_by: null })
-        .eq('id', claimedInvite.id)
+      db.invites.resetClaim(claimedInvite.id)
       return Response.json({ error: 'Failed to create user' }, { status: 500 })
     }
 
     // Update invite with the user ID who used it
-    await supabase
-      .from('zeude_invites')
-      .update({ used_by: newUser.id })
-      .eq('id', claimedInvite.id)
+    db.invites.markUsedBy(claimedInvite.id, newUser.id)
 
     return Response.json({
       agentKey,

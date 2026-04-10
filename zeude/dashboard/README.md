@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Zeude Dashboard
 
-## Getting Started
+Operational state lives in SQLite. Analytics stay in ClickHouse.
 
-First, run the development server:
+## Local development
 
 ```bash
+cp .env.example .env.local
+npm install
+npm run migrate:sqlite
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Default local SQLite path is `.data/zeude.db`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## One-time migration from Supabase
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+SUPABASE_URL=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+DATABASE_PATH=.data/zeude.db \
+npm run migrate:supabase-to-sqlite -- --dry-run
 
-## Learn More
+SUPABASE_URL=... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+DATABASE_PATH=.data/zeude.db \
+npm run migrate:supabase-to-sqlite
+```
 
-To learn more about Next.js, take a look at the following resources:
+Use `--force` only if the target SQLite DB already has data and you intend to replace conflicting rows.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Production
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`docker-compose.yaml` now assumes:
 
-## Deploy on Vercel
+- `DATABASE_PROVIDER=sqlite`
+- `DATABASE_PATH=/var/lib/zeude/zeude.db`
+- a persistent volume mounted at `/var/lib/zeude`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+ClickHouse remains external and must still be configured via env vars.

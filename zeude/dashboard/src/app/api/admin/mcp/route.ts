@@ -1,6 +1,6 @@
-import { createServerClient } from '@/lib/supabase'
 import { getSession } from '@/lib/session'
 import { fetchMCPData } from '@/lib/data/admin-mcp'
+import { getOperationalDb } from '@/lib/db'
 
 // GET: List all MCP servers (authenticated)
 export async function GET() {
@@ -43,11 +43,9 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Either URL or Command is required' }, { status: 400 })
     }
 
-    const supabase = createServerClient()
+    const db = getOperationalDb()
 
-    const { data: server, error } = await supabase
-      .from('zeude_mcp_servers')
-      .insert({
+    const server = await db.mcp.create({
         name,
         url: hasUrl ? url.trim() : null,
         command: hasCommand ? command.trim() : '',
@@ -58,13 +56,6 @@ export async function POST(req: Request) {
         status: 'active',
         created_by: session.user.id,
       })
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Failed to create MCP server:', error)
-      return Response.json({ error: 'Failed to create server' }, { status: 500 })
-    }
 
     return Response.json({ server })
   } catch (err) {
